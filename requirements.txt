@@ -1,0 +1,11 @@
+# Requirements pour Terminal IA Autonome
+# Python 3.8+
+
+# Client HTTP pour Ollama
+requests>=2.31.0
+
+# Détection hardware et monitoring système (Phase 1: Performance)
+psutil>=5.9.0
+
+# Menu interactif avec navigation par flèches (sélection modèle Ollama)
+simple-term-menu>=1.6.0

@@ -1,0 +1,18 @@
+[Unit]
+Description=Terminal IA Autonome Service
+After=network.target ollama.service
+Requires=ollama.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/TerminalIA
+Environment="PATH=/home/pi/TerminalIA/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/pi/TerminalIA/venv/bin/python3 /home/pi/TerminalIA/main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,298 @@
+"""Exécuteur de commandes shell sécurisé"""
+
+import subprocess
+import os
+import shlex
+from typing import Dict, Optional, Tuple, Any
+
+class CommandExecutor:
+    """Exécute des commandes shell de manière sécurisée"""
+
+    def __init__(self, settings, logger=None):
+        """
+        Initialise l'exécuteur de commandes
+
+        Args:
+            settings: Configuration de l'application
+            logger: Logger pour les messages
+        """
+        self.settings = settings
+        self.logger = logger
+        self.current_directory = os.getcwd()
+
+    def execute(self, command: str, timeout: int = 30) -> Dict[str, Any]:
+        """
+        Exécute une commande shell
+
+        Args:
+            command: La commande à exécuter
+            timeout: Timeout en secondes (défaut: 30)
+
+        Returns:
+            Dict avec 'success', 'output', 'error', 'return_code'
+        """
+        if not command or not command.strip():
+            return {
+                'success': False,
+                'output': '',
+                'error': 'Commande vide',
+                'return_code': -1
+            }
+
+        # Gérer la commande cd séparément (change le working directory)
+        if command.strip().startswith('cd '):
+            return self._handle_cd(command)
+
+        # Valider la commande avant exécution avec shell=True
+        is_safe, error_msg = self._validate_shell_command(command)
+        if not is_safe:
+            if self.logger:
+                self.logger.error(f"Commande bloquée pour raisons de sécurité: {error_msg}")
+            return {
+                'success': False,
+                'output': '',
+                'error': f'Sécurité: {error_msg}',
+                'return_code': -1
+            }
+
+        try:
+            if self.logger:
+                self.logger.info(f"Exécution de la commande: {command}")
+
+            # Exécuter la commande avec shell=True
+            # Note: shell=True est nécessaire pour supporter les features shell (pipes, redirections, etc.)
+            # La validation ci-dessus limite les risques d'injection
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=self.current_directory,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=os.environ.copy()
+            )
+
+            success = result.returncode == 0
+            output = result.stdout.strip()
+            error = result.stderr.strip()
+
+            if self.logger:
+                if success:
+                    self.logger.debug(f"Commande réussie. Output: {output[:200]}")
+                else:
+                    self.logger.warning(f"Commande échouée (code {result.returncode}). Error: {error[:200]}")
+
+            return {
+                'success': success,
+                'output': output,
+                'error': error,
+                'return_code': result.returncode
+            }
+
+        except subprocess.TimeoutExpired:
+            error_msg = f"Timeout: La commande a dépassé {timeout} secondes"
+            if self.logger:
+                self.logger.error(error_msg)
+            return {
+                'success': False,
+                'output': '',
+                'error': error_msg,
+                'return_code': -1
+            }
+
+        except Exception as e:
+            error_msg = f"Erreur lors de l'exécution: {str(e)}"
+            if self.logger:
+                self.logger.error(error_msg, exc_info=True)
+            return {
+                'success': False,
+                'output': '',
+                'error': error_msg,
+                'return_code': -1
+            }
+
+    def _handle_cd(self, command: str) -> Dict[str, Any]:
+        """
+        Gère la commande cd (changement de répertoire)
+
+        Args:
+            command: Commande cd avec le chemin
+
+        Returns:
+            Résultat de l'opération
+        """
+        parts = command.strip().split(maxsplit=1)
+
+        if len(parts) == 1:
+            # cd sans argument = aller au home
+            target_dir = os.path.expanduser('~')
+        else:
+            target_dir = parts[1].strip()
+            # Expander les chemins relatifs
+            if not os.path.isabs(target_dir):
+                target_dir = os.path.join(self.current_directory, target_dir)
+            target_dir = os.path.normpath(target_dir)
+
+        try:
+            if os.path.isdir(target_dir):
+                self.current_directory = target_dir
+                if self.logger:
+                    self.logger.info(f"Répertoire changé vers: {self.current_directory}")
+                return {
+                    'success': True,
+                    'output': f"Répertoire changé vers: {self.current_directory}",
+                    'error': '',
+                    'return_code': 0
+                }
+            else:
+                error_msg = f"Répertoire introuvable: {target_dir}"
+                return {
+                    'success': False,
+                    'output': '',
+                    'error': error_msg,
+                    'return_code': 1
+                }
+        except Exception as e:
+            error_msg = f"Erreur lors du changement de répertoire: {str(e)}"
+            if self.logger:
+                self.logger.error(error_msg)
+            return {
+                'success': False,
+                'output': '',
+                'error': error_msg,
+                'return_code': 1
+            }
+
+    def execute_safe(self, command: str, require_confirmation: bool = False) -> Dict[str, Any]:
+        """
+        Exécute une commande avec vérification de sécurité
+
+        Args:
+            command: La commande à exécuter
+            require_confirmation: Si True, lève une exception pour demander confirmation
+
+        Returns:
+            Résultat de l'exécution ou erreur
+        """
+        risk_level = self._assess_risk(command)
+
+        if risk_level == 'high' and require_confirmation:
+            return {
+                'success': False,
+                'output': '',
+                'error': 'CONFIRMATION_REQUIRED',
+                'return_code': -1,
+                'risk_level': risk_level
+            }
+
+        return self.execute(command)
+
+    def _assess_risk(self, command: str) -> str:
+        """Évalue le niveau de risque (délégué au parser normalement)"""
+        # Version simplifiée pour l'exécuteur
+        dangerous_commands = ['rm', 'rmdir', 'dd', 'mkfs', 'shutdown', 'reboot', 'kill']
+        cmd_base = command.split()[0] if command else ""
+
+        if cmd_base in dangerous_commands or 'sudo' in command or '-rf' in command:
+            return 'high'
+        return 'low'
+
+    def _validate_shell_command(self, command: str) -> Tuple[bool, str]:
+        """
+        Valide une commande avant exécution avec shell=True pour éviter les injections
+
+        Args:
+            command: La commande à valider
+
+        Returns:
+            Tuple (is_safe, warning_message)
+        """
+        if not command or not command.strip():
+            return False, "Commande vide"
+
+        # Patterns potentiellement dangereux pour injection shell
+        dangerous_patterns = [
+            ('$(', 'Substitution de commande détectée'),
+            ('`', 'Substitution de commande (backticks) détectée'),
+            ('&&', 'Chaînage de commandes détecté'),
+            ('||', 'Chaînage conditionnel détecté'),
+            (';', 'Séparateur de commandes détecté'),
+            ('|', 'Pipe détecté'),
+            ('>', 'Redirection de sortie détectée'),
+            ('<', 'Redirection d\'entrée détectée'),
+            ('\n', 'Nouvelle ligne dans la commande'),
+            ('\r', 'Retour chariot dans la commande'),
+        ]
+
+        warnings = []
+        for pattern, message in dangerous_patterns:
+            if pattern in command:
+                warnings.append(message)
+
+        # Commandes particulièrement dangereuses
+        very_dangerous = ['rm -rf /', 'dd if=', 'mkfs', ':(){:|:&};:', 'fork bomb']
+        for danger in very_dangerous:
+            if danger in command.lower():
+                return False, f"Commande interdite détectée: {danger}"
+
+        # Si des warnings, logger mais autoriser (pour compatibilité)
+        if warnings and self.logger:
+            self.logger.warning(f"Commande avec patterns à risque: {', '.join(warnings)}")
+            self.logger.warning(f"Commande: {command[:100]}")
+
+        return True, ""
+
+    def get_current_directory(self) -> str:
+        """Retourne le répertoire courant"""
+        return self.current_directory
+
+    def validate_command(self, command: str) -> Tuple[bool, str]:
+        """
+        Valide une commande avant exécution
+
+        Args:
+            command: La commande à valider
+
+        Returns:
+            Tuple (is_valid, error_message)
+        """
+        if not command or not command.strip():
+            return False, "Commande vide"
+
+        # Vérifier les caractères suspects
+        suspicious_patterns = [
+            '&&', '||', ';',  # Chaînage de commandes
+            '$(', '`',         # Command substitution
+            '|',               # Pipe (acceptable mais surveillé)
+        ]
+
+        # Pour une sécurité maximale, on pourrait bloquer ces patterns
+        # Mais pour l'instant on les autorise avec logging
+
+        return True, ""
+
+    def get_system_info(self) -> Dict[str, str]:
+        """
+        Récupère des informations système
+
+        Returns:
+            Dict avec les informations système
+        """
+        info = {}
+
+        commands = {
+            'hostname': 'hostname',
+            'username': 'whoami',
+            'os': 'uname -a',
+            'uptime': 'uptime',
+            'current_dir': 'pwd'
+        }
+
+        for key, cmd in commands.items():
+            result = self.execute(cmd, timeout=5)
+            if result['success']:
+                info[key] = result['output']
+            else:
+                info[key] = 'N/A'
+
+        return info

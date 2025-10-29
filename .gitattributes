@@ -1,0 +1,38 @@
+# Normalisation automatique des fins de ligne
+* text=auto
+
+# Fichiers Python: toujours LF
+*.py text eol=lf
+
+# Scripts shell: toujours LF
+*.sh text eol=lf
+
+# Markdown et documentation: toujours LF
+*.md text eol=lf
+
+# Fichiers texte: toujours LF
+*.txt text eol=lf
+
+# Fichiers de configuration: toujours LF
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+.env* text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Fichiers logs: toujours LF
+*.log text eol=lf
+
+# Fichiers binaires: ne pas modifier
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.pkl binary
+*.pickle binary
+*.pyc binary
+*.pyo binary
+*.pyd binary
