@@ -1,0 +1,206 @@
+# ╔════════════════════════════════════════════════════════════╗
+# ║  CoTer Shell - Configuration                               ║
+# ║  Terminal IA Autonome - Hybrid Shell Configuration         ║
+# ╚════════════════════════════════════════════════════════════╝
+
+# Mode de démarrage par défaut
+# Options: manual, auto, agent
+default_mode: manual
+
+# ═══════════════════════════════════════════════════════════
+# PROMPT CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+prompt:
+  # Activer les couleurs ANSI dans le prompt
+  enable_colors: true
+
+  # Format du prompt
+  # Options: full, simple, minimal
+  format: full
+
+  # Afficher le nom d'utilisateur
+  show_user: false
+
+  # Afficher le hostname
+  show_host: false
+
+  # Afficher la branche Git courante
+  show_git: true
+
+  # Prompt sur plusieurs lignes
+  multiline: true
+
+  # Longueur maximale du chemin affiché
+  max_path_length: 30
+
+# ═══════════════════════════════════════════════════════════
+# HISTORY CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+history:
+  # Chemin du fichier d'historique
+  # null = ~/.coter_history par défaut
+  file: null
+
+  # Nombre maximum de commandes dans l'historique
+  max_size: 10000
+
+  # Ignorer les doublons consécutifs
+  ignore_duplicates: true
+
+  # Sauvegarder l'historique immédiatement après chaque commande
+  immediate_save: true
+
+# ═══════════════════════════════════════════════════════════
+# SHELL BEHAVIOR
+# ═══════════════════════════════════════════════════════════
+shell:
+  # Timeout par défaut pour l'exécution de commandes (secondes)
+  command_timeout: 30
+
+  # Mode strict en mode AUTO/AGENT
+  # Si true, validation stricte des commandes
+  strict_mode_auto: true
+
+  # Confirmation pour les commandes à risque
+  confirm_dangerous_commands: true
+
+  # Auto-complétion activée
+  autocomplete: true
+
+  # Gestion des signaux
+  handle_signals: true
+
+# ═══════════════════════════════════════════════════════════
+# BUILTINS CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+builtins:
+  # Activer les commandes builtins
+  enabled: true
+
+  # Commandes builtins personnalisées à désactiver
+  # Liste de commandes à désactiver (exemple: ['echo', 'env'])
+  disabled: []
+
+# ═══════════════════════════════════════════════════════════
+# AI/OLLAMA CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+ai:
+  # Détection automatique des projets complexes en mode AUTO
+  auto_detect_complex_projects: true
+
+  # Demander confirmation avant de basculer en mode AGENT
+  confirm_agent_mode: true
+
+  # Timeout pour les requêtes Ollama (secondes)
+  ollama_timeout: 60
+
+# ═══════════════════════════════════════════════════════════
+# CACHE CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+cache:
+  # Activer le cache des réponses IA
+  enabled: true
+
+  # Politique d'éviction
+  # Options: lru, lfu, fifo
+  eviction_policy: lru
+
+  # Taille maximale du cache (nombre d'entrées)
+  max_entries: 1000
+
+# ═══════════════════════════════════════════════════════════
+# LOGGING
+# ═══════════════════════════════════════════════════════════
+logging:
+  # Niveau de log
+  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+
+  # Logs en couleur
+  colored_logs: true
+
+  # Logger les commandes sensibles
+  log_sensitive_commands: false
+
+# ═══════════════════════════════════════════════════════════
+# SECURITY
+# ═══════════════════════════════════════════════════════════
+security:
+  # Commandes toujours bloquées (blacklist)
+  blocked_commands:
+    - "rm -rf /"
+    - "dd if="
+    - "mkfs"
+    - ":(){:|:&};:"  # Fork bomb
+
+  # Patterns dangereux à surveiller
+  dangerous_patterns:
+    - "sudo rm -rf"
+    - "chmod 777"
+    - ">/dev/sda"
+
+  # Activer la validation de sécurité
+  enable_validation: true
+
+# ═══════════════════════════════════════════════════════════
+# RASPBERRY PI OPTIMIZATION
+# ═══════════════════════════════════════════════════════════
+raspberry_pi:
+  # Détection automatique du Raspberry Pi
+  auto_detect: true
+
+  # Mode basse consommation
+  low_power_mode: false
+
+  # Limite de mémoire pour le cache (Mo)
+  max_cache_memory: 50
+
+  # Optimisations CPU
+  optimize_cpu_usage: true
+
+# ═══════════════════════════════════════════════════════════
+# FEATURES FLAGS
+# ═══════════════════════════════════════════════════════════
+features:
+  # Activer le mode agent autonome
+  agent_mode: true
+
+  # Activer les snapshots/rollback
+  snapshots: true
+
+  # Activer l'auto-correction
+  auto_correction: true
+
+  # Activer le parallélisme
+  parallel_execution: true
+
+# ═══════════════════════════════════════════════════════════
+# UI/UX
+# ═══════════════════════════════════════════════════════════
+ui:
+  # Afficher la bannière de bienvenue
+  show_welcome_banner: true
+
+  # Afficher les statistiques au démarrage
+  show_startup_stats: false
+
+  # Afficher les suggestions de commandes
+  show_suggestions: true
+
+  # Format de sortie des résultats
+  # Options: compact, detailed, minimal
+  output_format: detailed
+
+# ═══════════════════════════════════════════════════════════
+# ADVANCED
+# ═══════════════════════════════════════════════════════════
+advanced:
+  # Nombre de workers pour le multiprocessing
+  # null = auto-détection
+  num_workers: null
+
+  # Utiliser le spawn method pour multiprocessing (Windows safe)
+  multiprocessing_method: spawn
+
+  # Buffer size pour la sortie des commandes
+  output_buffer_size: 8192

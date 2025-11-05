@@ -20,13 +20,14 @@ class CommandExecutor:
         self.logger = logger
         self.current_directory = os.getcwd()
 
-    def execute(self, command: str, timeout: int = 30) -> Dict[str, Any]:
+    def execute(self, command: str, timeout: int = 30, strict_mode: bool = True) -> Dict[str, Any]:
         """
         Exécute une commande shell
 
         Args:
             command: La commande à exécuter
             timeout: Timeout en secondes (défaut: 30)
+            strict_mode: Si True, validation stricte (mode AUTO/AGENT). Si False, validation minimale (mode MANUAL)
 
         Returns:
             Dict avec 'success', 'output', 'error', 'return_code'
@@ -44,7 +45,9 @@ class CommandExecutor:
             return self._handle_cd(command)
 
         # Valider la commande avant exécution avec shell=True
-        is_safe, error_msg = self._validate_shell_command(command)
+        # En mode strict (AUTO/AGENT), validation complète
+        # En mode permissif (MANUAL), validation minimale (seulement les commandes très dangereuses)
+        is_safe, error_msg = self._validate_shell_command(command, strict_mode)
         if not is_safe:
             if self.logger:
                 self.logger.error(f"Commande bloquée pour raisons de sécurité: {error_msg}")
@@ -197,12 +200,13 @@ class CommandExecutor:
             return 'high'
         return 'low'
 
-    def _validate_shell_command(self, command: str) -> Tuple[bool, str]:
+    def _validate_shell_command(self, command: str, strict_mode: bool = True) -> Tuple[bool, str]:
         """
         Valide une commande avant exécution avec shell=True pour éviter les injections
 
         Args:
             command: La commande à valider
+            strict_mode: Si True, validation stricte. Si False, validation minimale
 
         Returns:
             Tuple (is_safe, warning_message)
@@ -210,7 +214,20 @@ class CommandExecutor:
         if not command or not command.strip():
             return False, "Commande vide"
 
-        # Patterns potentiellement dangereux pour injection shell
+        # Commandes TOUJOURS interdites (peu importe le mode)
+        very_dangerous = ['rm -rf /', 'dd if=', 'mkfs', ':(){:|:&};:', 'fork bomb']
+        for danger in very_dangerous:
+            if danger in command.lower():
+                return False, f"Commande interdite détectée: {danger}"
+
+        # En mode MANUAL (strict_mode=False), on autorise pipes, redirections, etc.
+        # On bloque seulement les commandes vraiment dangereuses
+        if not strict_mode:
+            if self.logger:
+                self.logger.debug(f"Exécution en mode permissif: {command[:100]}")
+            return True, ""
+
+        # En mode strict (AUTO/AGENT), on surveille les patterns à risque
         dangerous_patterns = [
             ('$(', 'Substitution de commande détectée'),
             ('`', 'Substitution de commande (backticks) détectée'),
@@ -229,13 +246,7 @@ class CommandExecutor:
             if pattern in command:
                 warnings.append(message)
 
-        # Commandes particulièrement dangereuses
-        very_dangerous = ['rm -rf /', 'dd if=', 'mkfs', ':(){:|:&};:', 'fork bomb']
-        for danger in very_dangerous:
-            if danger in command.lower():
-                return False, f"Commande interdite détectée: {danger}"
-
-        # Si des warnings, logger mais autoriser (pour compatibilité)
+        # Si des warnings en mode strict, logger mais autoriser (pour compatibilité)
         if warnings and self.logger:
             self.logger.warning(f"Commande avec patterns à risque: {', '.join(warnings)}")
             self.logger.warning(f"Commande: {command[:100]}")

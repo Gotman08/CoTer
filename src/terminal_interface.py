@@ -10,6 +10,7 @@ from src.utils import (
     CommandLogger, SecurityValidator,
     StatsDisplayer, InputValidator, UIFormatter
 )
+from src.core import ShellEngine, ShellMode, HistoryManager, BuiltinCommands
 from config import prompts, project_templates, constants
 
 class TerminalInterface:
@@ -28,6 +29,19 @@ class TerminalInterface:
         self.logger = logger
         self.cache_manager = cache_manager
         self.running = False
+
+        # Initialiser le moteur du shell hybride
+        default_mode = ShellMode.MANUAL  # Mode par défaut: MANUAL
+        self.shell_engine = ShellEngine(default_mode)
+        self.logger.info(f"Shell initialisé en mode {default_mode.value}")
+
+        # Initialiser le gestionnaire d'historique
+        self.history_manager = HistoryManager()
+        self.logger.info(f"Historique chargé: {len(self.history_manager)} commandes")
+
+        # Initialiser les commandes builtins
+        self.builtins = BuiltinCommands(self)
+        self.logger.info(f"Commandes builtins chargées: {len(self.builtins.get_builtin_names())}")
 
         # Initialiser les utilitaires d'affichage (Refactoring)
         self.ui = UIFormatter()
@@ -86,7 +100,14 @@ class TerminalInterface:
         # Afficher le logo ASCII
         print(prompts.ASCII_LOGO)
         print(f"\nModèle: {self.settings.ollama_model} | Host: {self.settings.ollama_host}")
-        print("Tapez /help pour l'aide, /quit pour quitter\n")
+
+        # Afficher le mode actuel
+        mode_symbol = self.shell_engine.get_prompt_symbol()
+        mode_name = self.shell_engine.mode_name.upper()
+        print(f"{mode_symbol}  Mode: {mode_name} - {self.shell_engine.get_mode_description()}")
+
+        print("\nCommandes: /manual /auto /agent /help /quit")
+        print("Tapez /help pour l'aide complète\n")
 
         # Vérifier la connexion à Ollama
         if not self.ollama.check_connection():
@@ -109,9 +130,10 @@ class TerminalInterface:
     def _process_input(self):
         """Traite une entrée utilisateur"""
         try:
-            # Afficher le prompt avec le répertoire courant
+            # Afficher le prompt avec le symbole du mode actuel et le répertoire courant
             current_dir = self.executor.get_current_directory()
-            prompt_text = f"\n🤖 [{current_dir}]\n> "
+            mode_symbol = self.shell_engine.get_prompt_symbol()
+            prompt_text = f"\n{mode_symbol} [{current_dir}]\n> "
 
             # Lire l'entrée utilisateur
             user_input = input(prompt_text).strip()
@@ -147,6 +169,26 @@ class TerminalInterface:
         elif cmd_lower == '/help':
             print(prompts.HELP_TEXT)
 
+        elif cmd_lower == '/manual':
+            # Basculer en mode MANUAL
+            if self.shell_engine.switch_to_manual():
+                print(f"\n⌨️  Mode MANUAL activé")
+                print(f"   {self.shell_engine.get_mode_description()}")
+            else:
+                print(f"\n⌨️  Déjà en mode MANUAL")
+
+        elif cmd_lower == '/auto':
+            # Basculer en mode AUTO
+            if self.shell_engine.switch_to_auto():
+                print(f"\n🤖 Mode AUTO activé")
+                print(f"   {self.shell_engine.get_mode_description()}")
+            else:
+                print(f"\n🤖 Déjà en mode AUTO")
+
+        elif cmd_lower == '/status':
+            # Afficher le statut du shell
+            self._show_shell_status()
+
         elif cmd_lower == '/clear':
             self.parser.clear_history()
             self.ollama.clear_history()
@@ -167,6 +209,9 @@ class TerminalInterface:
         elif cmd_lower.startswith('/agent'):
             # Mode agent autonome
             if self.agent:
+                # Basculer en mode AGENT
+                self.shell_engine.switch_to_agent()
+
                 # Extraire la demande après /agent
                 request = command[6:].strip()
                 if request:
@@ -267,8 +312,101 @@ class TerminalInterface:
         Args:
             user_input: Demande de l'utilisateur
         """
-        print(f"\n🔄 Analyse de votre demande...")
+        # Incrémenter le compteur de commandes
+        self.shell_engine.increment_command_count()
 
+        try:
+            # MODE MANUAL : Exécution directe sans IA
+            if self.shell_engine.is_manual_mode():
+                self._handle_manual_mode(user_input)
+                return
+
+            # MODE AUTO : Parsing IA puis exécution
+            elif self.shell_engine.is_auto_mode():
+                print(f"\n🔄 Analyse de votre demande...")
+                self._handle_auto_mode(user_input)
+                return
+
+            # MODE AGENT : Toujours proposer le mode autonome
+            elif self.shell_engine.is_agent_mode():
+                print(f"\n🏗️  Mode AGENT : Analyse en cours...")
+                self._handle_autonomous_mode(user_input)
+                return
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors du traitement: {e}", exc_info=True)
+            print(f"\n❌ Erreur: {e}")
+
+    def _handle_manual_mode(self, user_input: str):
+        """
+        Gère les commandes en mode MANUAL (exécution directe)
+
+        Args:
+            user_input: Commande shell à exécuter
+        """
+        try:
+            # Vérifier si c'est une commande builtin
+            if self.builtins.is_builtin(user_input):
+                result = self.builtins.execute(user_input)
+                if result is None:
+                    # Pas vraiment builtin, passer à l'exécution normale
+                    pass
+                else:
+                    # Commande builtin exécutée
+                    # Afficher le résultat
+                    self._display_result(result)
+
+                    # Ajouter à l'historique persistant
+                    self.history_manager.add_command(
+                        command=user_input,
+                        mode="manual",
+                        success=result['success']
+                    )
+
+                    # Logger la commande
+                    self.command_logger.log_command(
+                        user_input=user_input,
+                        command=user_input,
+                        success=result['success'],
+                        output=result.get('output', ''),
+                        error=result.get('error', '')
+                    )
+                    return
+
+            # Exécuter via subprocess (pas builtin)
+            # strict_mode=False pour autoriser pipes, redirections, etc.
+            result = self.executor.execute(user_input, strict_mode=False)
+
+            # Afficher le résultat
+            self._display_result(result)
+
+            # Ajouter à l'historique persistant
+            self.history_manager.add_command(
+                command=user_input,
+                mode="manual",
+                success=result['success']
+            )
+
+            # Logger la commande
+            self.command_logger.log_command(
+                user_input=user_input,
+                command=user_input,  # En mode manual, la commande = l'input
+                success=result['success'],
+                output=result.get('output', ''),
+                error=result.get('error', '')
+            )
+
+        except Exception as e:
+            self.logger.error(f"Erreur mode manuel: {e}", exc_info=True)
+            print(f"\n❌ Erreur: {e}")
+
+    def _handle_auto_mode(self, user_input: str):
+        """
+        Gère les commandes en mode AUTO (avec IA)
+
+        Args:
+            user_input: Demande en langage naturel
+        """
         try:
             # Si l'agent est activé, vérifier si c'est une demande complexe
             if self.agent and self.settings.agent_enabled:
@@ -282,6 +420,7 @@ class TerminalInterface:
                     # Demander si l'utilisateur veut utiliser le mode autonome
                     response = input("\nUtiliser le mode agent autonome? (oui/non): ").strip().lower()
                     if response in ['oui', 'o', 'yes', 'y']:
+                        self.shell_engine.switch_to_agent()
                         self._handle_autonomous_mode(user_input)
                         return
                     else:
@@ -323,6 +462,13 @@ class TerminalInterface:
             # Afficher le résultat
             self._display_result(result)
 
+            # Ajouter à l'historique persistant
+            self.history_manager.add_command(
+                command=command,
+                mode="auto",
+                success=result['success']
+            )
+
             # Logger la commande
             self.command_logger.log_command(
                 user_input=user_input,
@@ -339,11 +485,11 @@ class TerminalInterface:
                 risk_level=security_level
             )
 
-            # Ajouter à l'historique
+            # Ajouter à l'historique du parser (legacy)
             self.parser.add_to_history(user_input, command, result.get('output', ''))
 
         except Exception as e:
-            self.logger.error(f"Erreur lors du traitement: {e}", exc_info=True)
+            self.logger.error(f"Erreur mode auto: {e}", exc_info=True)
             print(f"\n❌ Erreur: {e}")
 
     def _confirm_command(self, command: str, risk_level: str, reason: str) -> bool:
@@ -395,20 +541,49 @@ class TerminalInterface:
 
     def _show_history(self):
         """Affiche l'historique des commandes"""
-        history = self.parser.get_history()
+        history = self.history_manager.get_recent(20)  # Dernières 20 commandes
 
         if not history:
             print("\n📝 Aucune commande dans l'historique")
             return
 
         print("\n📝 Historique des commandes:")
-        print("═" * 70)
+        print("═" * 80)
 
-        for i, entry in enumerate(history[-10:], 1):  # Dernières 10 commandes
-            print(f"\n{i}. Demande: {entry['input']}")
-            print(f"   Commande: {entry['command']}")
+        for i, entry in enumerate(history, 1):
+            # Icônes selon le mode
+            mode_icons = {
+                'manual': '⌨️',
+                'auto': '🤖',
+                'agent': '🏗️'
+            }
+            icon = mode_icons.get(entry.get('mode', 'manual'), '❓')
 
-        print("═" * 70)
+            # Indicateur de succès
+            status = '✅' if entry.get('success', True) else '❌'
+
+            # Timestamp (simplifié)
+            timestamp = entry.get('timestamp', '')
+            if timestamp:
+                # Garder seulement HH:MM:SS
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp)
+                    time_str = dt.strftime('%H:%M:%S')
+                except:
+                    time_str = timestamp[:8]
+            else:
+                time_str = '??:??:??'
+
+            print(f"\n{i:2}. {icon} [{time_str}] {status} {entry['command']}")
+
+        print("\n═" * 80)
+        print(f"Total: {len(self.history_manager)} commandes | Affichées: {len(history)}")
+
+        # Afficher les statistiques
+        stats = self.history_manager.get_statistics()
+        print(f"Taux de succès: {stats['success_rate']:.1f}%")
+        print("\nUtilisez '/history search <terme>' pour rechercher")
 
     def _list_models(self):
         """Liste les modèles Ollama disponibles et permet de changer de modèle"""
@@ -824,6 +999,34 @@ class TerminalInterface:
         except Exception as e:
             self.ui.print_error(f"Erreur: {e}")
             self.logger.error(f"Erreur affichage erreur: {e}")
+
+    def _show_shell_status(self):
+        """Affiche le statut du shell et les statistiques"""
+        stats = self.shell_engine.get_statistics()
+
+        print("\n" + "="*60)
+        print("🖥️  STATUT DU SHELL COTER")
+        print("="*60)
+
+        mode_icon = self.shell_engine.get_prompt_symbol()
+        print(f"\n{mode_icon}  Mode actuel: {stats['current_mode'].upper()}")
+        print(f"   {self.shell_engine.get_mode_description()}")
+
+        print(f"\n📊 Statistiques de session:")
+        print(f"   • Mode de démarrage: {stats['session_start_mode']}")
+        print(f"   • Changements de mode: {stats['mode_changes']}")
+        print(f"   • Total de commandes: {stats['total_commands']}")
+
+        print(f"\n📈 Commandes par mode:")
+        for mode, count in stats['command_counts'].items():
+            print(f"   • {mode.upper()}: {count}")
+
+        if len(stats['mode_history']) > 1:
+            print(f"\n🔄 Historique des modes:")
+            history_display = " → ".join(stats['mode_history'])
+            print(f"   {history_display}")
+
+        print("="*60)
 
     def _quit(self):
         """Quitte l'application"""
