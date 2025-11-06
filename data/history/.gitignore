@@ -1,0 +1,4 @@
+# Ignore everything in history/
+*
+# Except this file
+!.gitignore
