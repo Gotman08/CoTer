@@ -1,7 +1,6 @@
 """Utilitaires du Terminal IA"""
 
 from .logger import setup_logger, CommandLogger
-from .security import SecurityValidator
 from .cache_manager import CacheManager
 from .parallel_executor import ParallelExecutor
 from .hardware_optimizer import HardwareOptimizer
@@ -14,7 +13,6 @@ from . import parallel_workers
 __all__ = [
     'setup_logger',
     'CommandLogger',
-    'SecurityValidator',
     'CacheManager',
     'ParallelExecutor',
     'HardwareOptimizer',

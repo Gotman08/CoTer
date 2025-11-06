@@ -6,7 +6,7 @@ import os
 # Ajouter le répertoire parent au path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.utils.security import SecurityValidator
+from src.security import SecurityValidator
 
 def test_safe_command():
     """Test d'une commande sûre"""
