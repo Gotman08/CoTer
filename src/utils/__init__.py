@@ -4,6 +4,8 @@ from .logger import setup_logger, CommandLogger
 from .cache_manager import CacheManager
 from .parallel_executor import ParallelExecutor
 from .hardware_optimizer import HardwareOptimizer
+from .arm_optimizer import ARMOptimizer
+from .gc_optimizer import GCOptimizer
 from .rollback_manager import RollbackManager
 from .auto_corrector import AutoCorrector
 from .ui_helpers import UIFormatter, StatsDisplayer, InputValidator
@@ -16,6 +18,8 @@ __all__ = [
     'CacheManager',
     'ParallelExecutor',
     'HardwareOptimizer',
+    'ARMOptimizer',
+    'GCOptimizer',
     'RollbackManager',
     'AutoCorrector',
     'UIFormatter',

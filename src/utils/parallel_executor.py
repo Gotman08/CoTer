@@ -1,15 +1,17 @@
 """Exécuteur parallèle pour les tâches indépendantes de l'agent autonome"""
 
 import concurrent.futures
-from typing import List, Dict, Callable, Any
+from typing import List, Dict, Callable, Any, Optional
 import time
 import multiprocessing
+import platform
 from config import constants
 
 class ParallelExecutor:
     """Exécute des tâches en VRAI parallèle pour accélérer l'agent autonome (multiprocessing)"""
 
-    def __init__(self, max_workers: int = None, logger=None, executor_type: str = None):
+    def __init__(self, max_workers: int = None, logger=None, executor_type: str = None,
+                 persistent_pool: bool = True):
         """
         Initialise l'exécuteur parallèle
 
@@ -17,12 +19,22 @@ class ParallelExecutor:
             max_workers: Nombre maximum de workers (None = auto-détection)
             logger: Logger pour les messages
             executor_type: 'process' ou 'thread' (None = utiliser constante)
+            persistent_pool: Si True, maintient un pool persistant (CSAPP Ch.8 - réduit overhead ARM)
         """
         self.max_workers = max_workers or self._get_optimal_workers()
         self.logger = logger
+        self.persistent_pool = persistent_pool
+
+        # Détection ARM pour optimisations spécifiques
+        self.is_arm = self._detect_arm()
 
         # Utiliser la constante si non spécifié
         self.executor_type = executor_type or constants.PARALLEL_EXECUTOR_TYPE
+
+        # Pool persistant pour réduire overhead de création/destruction (CSAPP Ch.8)
+        self._pool: Optional[concurrent.futures.Executor] = None
+        self._pool_task_count = 0
+        self._pool_max_tasks = 100 if self.is_arm else 200  # Recycler plus souvent sur ARM
 
         # Configurer multiprocessing pour Windows
         if self.executor_type == 'process':
@@ -52,7 +64,20 @@ class ParallelExecutor:
 
         if self.logger:
             mode = "MULTIPROCESSING (vrai parallélisme)" if self.executor_type == 'process' else "THREADING (concurrent I/O)"
-            self.logger.info(f"ParallelExecutor initialisé avec {self.max_workers} workers en mode {mode}")
+            pool_mode = "pool persistant" if self.persistent_pool else "pool temporaire"
+            arm_info = " [ARM optimisé]" if self.is_arm else ""
+            self.logger.info(f"ParallelExecutor initialisé avec {self.max_workers} workers en mode {mode} ({pool_mode}){arm_info}")
+
+    def _detect_arm(self) -> bool:
+        """
+        Détecte si on est sur architecture ARM (CSAPP Ch.8)
+
+        Returns:
+            True si ARM
+        """
+        machine = platform.machine().lower()
+        arm_archs = ['aarch64', 'armv7l', 'armv8', 'arm64']
+        return any(arch in machine for arch in arm_archs)
 
     def _get_optimal_workers(self) -> int:
         """
@@ -81,6 +106,111 @@ class ParallelExecutor:
             # 8+ GB RAM
             return min(cpu_count, 8)
 
+    def _get_pool(self) -> concurrent.futures.Executor:
+        """
+        Obtient ou crée le pool d'exécution (CSAPP Ch.8 - pool persistant)
+
+        Returns:
+            Pool d'exécution
+        """
+        # Si pool existe et pas besoin de recycler, le réutiliser
+        if self._pool is not None and self._pool_task_count < self._pool_max_tasks:
+            return self._pool
+
+        # Sinon, recycler le pool
+        if self._pool is not None:
+            if self.logger:
+                self.logger.debug(f"Recyclage du pool après {self._pool_task_count} tâches")
+            self._recycle_pool()
+
+        # Créer nouveau pool
+        executor_class = (concurrent.futures.ProcessPoolExecutor
+                         if self.executor_type == 'process'
+                         else concurrent.futures.ThreadPoolExecutor)
+
+        self._pool = executor_class(max_workers=self.max_workers)
+        self._pool_task_count = 0
+
+        if self.logger:
+            pool_type = "Process" if self.executor_type == 'process' else "Thread"
+            self.logger.debug(f"{pool_type}Pool créé avec {self.max_workers} workers")
+
+        return self._pool
+
+    def _recycle_pool(self):
+        """Recycle le pool d'exécution pour libérer ressources (CSAPP Ch.8)"""
+        if self._pool is not None:
+            try:
+                self._pool.shutdown(wait=True)
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"Erreur lors du recyclage du pool: {e}")
+            finally:
+                self._pool = None
+                self._pool_task_count = 0
+
+    def shutdown(self):
+        """Arrête proprement le pool d'exécution"""
+        if self._pool is not None:
+            if self.logger:
+                self.logger.debug("Arrêt du pool d'exécution")
+            self._recycle_pool()
+
+    def __enter__(self):
+        """Support du context manager"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Nettoyage automatique à la sortie du context manager"""
+        self.shutdown()
+        return False
+
+    def __del__(self):
+        """Nettoyage lors de la destruction de l'objet"""
+        self.shutdown()
+
+    def _execute_tasks(self, executor: concurrent.futures.Executor,
+                      tasks: List[Dict], executor_func: Callable,
+                      results: List) -> List[Dict]:
+        """
+        Exécute les tâches sur un executor donné
+
+        Args:
+            executor: Pool d'exécution
+            tasks: Liste de tâches
+            executor_func: Fonction à appeler
+            results: Liste des résultats à remplir
+
+        Returns:
+            Liste des résultats
+        """
+        # Soumettre toutes les tâches
+        future_to_index = {
+            executor.submit(executor_func, task): i
+            for i, task in enumerate(tasks)
+        }
+
+        # Récupérer les résultats au fur et à mesure
+        for future in concurrent.futures.as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                result = future.result()
+                results[index] = result
+
+                if self.logger:
+                    self.logger.debug(f"Tâche {index + 1}/{len(tasks)} terminée")
+
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Erreur tâche {index}: {e}", exc_info=True)
+                results[index] = {
+                    'success': False,
+                    'error': str(e),
+                    'task_index': index
+                }
+
+        return results
+
     def execute_parallel(self, tasks: List[Dict], executor_func: Callable) -> List[Dict]:
         """
         Exécute une liste de tâches en VRAI parallèle (multiprocessing)
@@ -105,39 +235,30 @@ class ParallelExecutor:
 
         if self.logger:
             mode = "MULTIPROCESSING" if self.executor_type == 'process' else "THREADING"
-            self.logger.info(f"Exécution {mode} de {len(tasks)} tâches avec {self.max_workers} workers...")
-
-        # Choisir l'executor selon le type
-        executor_class = (concurrent.futures.ProcessPoolExecutor
-                         if self.executor_type == 'process'
-                         else concurrent.futures.ThreadPoolExecutor)
+            pool_info = f" [pool persistant, {self._pool_task_count} tâches]" if self.persistent_pool else ""
+            self.logger.info(f"Exécution {mode} de {len(tasks)} tâches avec {self.max_workers} workers{pool_info}")
 
         try:
-            with executor_class(max_workers=self.max_workers) as executor:
-                # Soumettre toutes les tâches
-                future_to_index = {
-                    executor.submit(executor_func, task): i
-                    for i, task in enumerate(tasks)
-                }
+            # Utiliser pool persistant ou créer nouveau pool
+            if self.persistent_pool:
+                executor = self._get_pool()
+                use_context_manager = False
+            else:
+                # Mode legacy: créer nouveau pool à chaque fois
+                executor_class = (concurrent.futures.ProcessPoolExecutor
+                                 if self.executor_type == 'process'
+                                 else concurrent.futures.ThreadPoolExecutor)
+                executor = executor_class(max_workers=self.max_workers)
+                use_context_manager = True
 
-                # Récupérer les résultats au fur et à mesure
-                for future in concurrent.futures.as_completed(future_to_index):
-                    index = future_to_index[future]
-                    try:
-                        result = future.result()
-                        results[index] = result
-
-                        if self.logger:
-                            self.logger.debug(f"Tâche {index + 1}/{len(tasks)} terminée")
-
-                    except Exception as e:
-                        if self.logger:
-                            self.logger.error(f"Erreur tâche {index}: {e}", exc_info=True)
-                        results[index] = {
-                            'success': False,
-                            'error': str(e),
-                            'task_index': index
-                        }
+            # Exécuter les tâches
+            if use_context_manager:
+                with executor:
+                    results = self._execute_tasks(executor, tasks, executor_func, results)
+            else:
+                results = self._execute_tasks(executor, tasks, executor_func, results)
+                # Incrémenter compteur pour recyclage
+                self._pool_task_count += len(tasks)
 
         except Exception as e:
             # Fallback sur threading si multiprocessing échoue

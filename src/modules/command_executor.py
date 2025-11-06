@@ -11,18 +11,27 @@ from src.security import RiskAssessor
 class CommandExecutor:
     """Exécute des commandes shell de manière sécurisée"""
 
-    def __init__(self, settings, logger=None):
+    # Limites de buffer pour sortie commande (CSAPP Ch.10)
+    MAX_OUTPUT_SIZE_BYTES = 1 * 1024 * 1024  # 1MB max pour stdout/stderr
+    OUTPUT_BUFFER_SIZE = 8192  # 8KB buffer pour lecture streaming
+
+    def __init__(self, settings, logger=None, max_output_size: Optional[int] = None):
         """
         Initialise l'exécuteur de commandes
 
         Args:
             settings: Configuration de l'application
             logger: Logger pour les messages
+            max_output_size: Taille max de sortie (None = utiliser MAX_OUTPUT_SIZE_BYTES)
         """
         self.settings = settings
         self.logger = SafeLogger(logger)
         self.risk_assessor = RiskAssessor()
         self.current_directory = os.getcwd()
+        self.max_output_size = max_output_size or self.MAX_OUTPUT_SIZE_BYTES
+
+        if self.logger:
+            self.logger.debug(f"Buffer limit: max_output={self.max_output_size / 1024:.0f}KB")
 
     def execute(self, command: str, timeout: int = 30, strict_mode: bool = True) -> Dict[str, Any]:
         """
@@ -71,12 +80,37 @@ class CommandExecutor:
             output = result.stdout.strip()
             error = result.stderr.strip()
 
+            # Vérifier et limiter la taille de la sortie (protection mémoire CSAPP Ch.10)
+            output_size = len(output.encode('utf-8'))
+            error_size = len(error.encode('utf-8'))
+            output_truncated = False
+            error_truncated = False
+
+            if output_size > self.max_output_size:
+                output = output[:self.max_output_size]
+                output += f"\n\n[... Sortie tronquée à {self.max_output_size / 1024:.0f}KB ...]"
+                output_truncated = True
+                self.logger.warning(f"Stdout tronqué: {output_size / 1024:.1f}KB > {self.max_output_size / 1024:.0f}KB")
+
+            if error_size > self.max_output_size:
+                error = error[:self.max_output_size]
+                error += f"\n\n[... Erreur tronquée à {self.max_output_size / 1024:.0f}KB ...]"
+                error_truncated = True
+                self.logger.warning(f"Stderr tronqué: {error_size / 1024:.1f}KB > {self.max_output_size / 1024:.0f}KB")
+
             if success:
                 self.logger.debug(f"Commande réussie. Output: {output[:200]}")
-                return create_success_result(output, result.returncode)
+                result_dict = create_success_result(output, result.returncode)
+                if output_truncated:
+                    result_dict['truncated'] = True
+                    result_dict['original_size_kb'] = output_size / 1024
+                return result_dict
             else:
                 self.logger.warning(f"Commande échouée (code {result.returncode}). Error: {error[:200]}")
-                return create_error_result(error, result.returncode, output)
+                result_dict = create_error_result(error, result.returncode, output)
+                if error_truncated or output_truncated:
+                    result_dict['truncated'] = True
+                return result_dict
 
         except subprocess.TimeoutExpired:
             error_msg = f"Timeout: La commande a dépassé {timeout} secondes"

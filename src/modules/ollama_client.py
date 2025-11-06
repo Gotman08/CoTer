@@ -7,7 +7,13 @@ from typing import Dict, Optional, Generator
 class OllamaClient:
     """Client pour l'API Ollama"""
 
-    def __init__(self, host: str, model: str, timeout: int = 120, logger=None, cache_manager=None):
+    # Limites de buffer pour éviter surcharge mémoire (CSAPP Ch.10)
+    MAX_CONVERSATION_HISTORY = 50  # Messages max dans l'historique
+    MAX_RESPONSE_SIZE_BYTES = 1 * 1024 * 1024  # 1MB max pour une réponse
+    MAX_STREAM_CHUNK_SIZE = 8192  # 8KB par chunk en streaming
+
+    def __init__(self, host: str, model: str, timeout: int = 120, logger=None, cache_manager=None,
+                 max_history: Optional[int] = None):
         """
         Initialise le client Ollama
 
@@ -17,6 +23,7 @@ class OllamaClient:
             timeout: Timeout en secondes pour les requêtes
             logger: Logger pour les messages
             cache_manager: Gestionnaire de cache optionnel (CacheManager)
+            max_history: Taille max de l'historique (None = utiliser MAX_CONVERSATION_HISTORY)
         """
         self.host = host.rstrip('/')
         self.model = model
@@ -24,9 +31,14 @@ class OllamaClient:
         self.logger = logger
         self.cache_manager = cache_manager
         self.conversation_history = []
+        self.max_history = max_history or self.MAX_CONVERSATION_HISTORY
 
         if self.cache_manager and self.logger:
             self.logger.info("Cache Ollama activé")
+
+        if self.logger:
+            self.logger.debug(f"Buffer limits: max_history={self.max_history}, "
+                            f"max_response={self.MAX_RESPONSE_SIZE_BYTES / 1024:.0f}KB")
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None, stream: bool = False) -> str:
         """
@@ -72,6 +84,16 @@ class OllamaClient:
                 result = response.json()
                 generated_response = result.get('response', '')
 
+                # Vérifier la taille de la réponse (protection mémoire)
+                response_size = len(generated_response.encode('utf-8'))
+                if response_size > self.MAX_RESPONSE_SIZE_BYTES:
+                    if self.logger:
+                        self.logger.warning(f"Réponse tronquée: {response_size / 1024:.1f}KB "
+                                          f"> {self.MAX_RESPONSE_SIZE_BYTES / 1024:.0f}KB")
+                    # Tronquer à la limite
+                    generated_response = generated_response[:self.MAX_RESPONSE_SIZE_BYTES]
+                    generated_response += "\n\n[... Réponse tronquée pour limiter l'utilisation mémoire ...]"
+
                 # Stocker dans le cache
                 if self.cache_manager and generated_response:
                     self.cache_manager.set(prompt, generated_response, self.model, system_prompt)
@@ -91,19 +113,46 @@ class OllamaClient:
             return f"Erreur: {error_msg}"
 
     def _handle_stream(self, response) -> Generator[str, None, None]:
-        """Gère le streaming de la réponse"""
-        for line in response.iter_lines():
+        """Gère le streaming de la réponse avec limite de buffer (CSAPP Ch.10)"""
+        total_bytes = 0
+
+        for line in response.iter_lines(chunk_size=self.MAX_STREAM_CHUNK_SIZE):
             if line:
                 try:
                     data = json.loads(line)
                     if 'response' in data:
-                        yield data['response']
+                        chunk = data['response']
+                        chunk_size = len(chunk.encode('utf-8'))
+
+                        # Vérifier la limite totale
+                        if total_bytes + chunk_size > self.MAX_RESPONSE_SIZE_BYTES:
+                            remaining = self.MAX_RESPONSE_SIZE_BYTES - total_bytes
+                            if remaining > 0:
+                                yield chunk[:remaining]
+                            if self.logger:
+                                self.logger.warning(f"Stream tronqué à {self.MAX_RESPONSE_SIZE_BYTES / 1024:.0f}KB")
+                            yield "\n\n[... Stream tronqué pour limiter l'utilisation mémoire ...]"
+                            break
+
+                        total_bytes += chunk_size
+                        yield chunk
                 except json.JSONDecodeError:
                     continue
 
+    def _trim_history(self):
+        """Limite la taille de l'historique pour éviter surcharge mémoire (CSAPP Ch.10)"""
+        if len(self.conversation_history) > self.max_history:
+            # Garder seulement les N derniers messages
+            removed_count = len(self.conversation_history) - self.max_history
+            self.conversation_history = self.conversation_history[-self.max_history:]
+
+            if self.logger:
+                self.logger.debug(f"Historique tronqué: {removed_count} messages supprimés "
+                                f"(limite: {self.max_history})")
+
     def chat(self, message: str, system_prompt: Optional[str] = None) -> str:
         """
-        Envoie un message dans une conversation
+        Envoie un message dans une conversation avec gestion limitée de l'historique
 
         Args:
             message: Le message utilisateur
@@ -119,6 +168,9 @@ class OllamaClient:
             "role": "user",
             "content": message
         })
+
+        # Limiter la taille de l'historique (protection mémoire)
+        self._trim_history()
 
         payload = {
             "model": self.model,
