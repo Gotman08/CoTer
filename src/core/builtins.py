@@ -9,6 +9,8 @@ from typing import Dict, Any, Callable, Optional
 from pathlib import Path
 import logging
 
+from src.utils.command_helpers import create_success_result, create_error_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,12 +90,7 @@ class BuiltinCommands:
             return self.commands[cmd_name](parts[1:])
         except Exception as e:
             logger.error(f"Erreur dans commande builtin {cmd_name}: {e}")
-            return {
-                'success': False,
-                'output': '',
-                'error': f"Erreur: {str(e)}",
-                'return_code': 1
-            }
+            return create_error_result(f"Erreur: {str(e)}", 1)
 
     def cmd_cd(self, args: list) -> Dict[str, Any]:
         """Commande cd - Changer de répertoire"""
@@ -120,28 +117,13 @@ class BuiltinCommands:
             if hasattr(self.terminal, 'executor'):
                 self.terminal.executor.current_directory = target_dir
 
-            return {
-                'success': True,
-                'output': '',  # cd ne produit pas de sortie normalement
-                'error': '',
-                'return_code': 0
-            }
+            return create_success_result('')  # cd ne produit pas de sortie normalement
         else:
-            return {
-                'success': False,
-                'output': '',
-                'error': f"cd: {target_dir}: No such file or directory",
-                'return_code': 1
-            }
+            return create_error_result(f"cd: {target_dir}: No such file or directory", 1)
 
     def cmd_pwd(self, args: list) -> Dict[str, Any]:
         """Commande pwd - Afficher le répertoire courant"""
-        return {
-            'success': True,
-            'output': self.current_dir,
-            'error': '',
-            'return_code': 0
-        }
+        return create_success_result(self.current_dir)
 
     def cmd_exit(self, args: list) -> Dict[str, Any]:
         """Commande exit/quit - Quitter le shell"""
@@ -166,22 +148,12 @@ class BuiltinCommands:
         else:  # Unix/Linux/macOS
             os.system('clear')
 
-        return {
-            'success': True,
-            'output': '',
-            'error': '',
-            'return_code': 0
-        }
+        return create_success_result('')
 
     def cmd_history(self, args: list) -> Dict[str, Any]:
         """Commande history - Afficher/gérer l'historique"""
         if not hasattr(self.terminal, 'history_manager'):
-            return {
-                'success': False,
-                'output': '',
-                'error': "Historique non disponible",
-                'return_code': 1
-            }
+            return create_error_result("Historique non disponible", 1)
 
         # Sous-commandes
         if not args:
@@ -214,12 +186,7 @@ class BuiltinCommands:
         else:
             print(f"Usage: history [clear|search <terme>|stats]")
 
-        return {
-            'success': True,
-            'output': '',
-            'error': '',
-            'return_code': 0
-        }
+        return create_success_result('')
 
     def cmd_help(self, args: list) -> Dict[str, Any]:
         """Commande help - Afficher l'aide"""
@@ -267,13 +234,7 @@ EN MODE AGENT:
   Exemple: /agent crée-moi une API REST avec FastAPI
 """
         print(help_text)
-
-        return {
-            'success': True,
-            'output': '',
-            'error': '',
-            'return_code': 0
-        }
+        return create_success_result('')
 
     def cmd_env(self, args: list) -> Dict[str, Any]:
         """Commande env - Afficher les variables d'environnement"""
@@ -283,51 +244,26 @@ EN MODE AGENT:
             for key, value in sorted(os.environ.items()):
                 output_lines.append(f"{key}={value}")
 
-            return {
-                'success': True,
-                'output': '\n'.join(output_lines),
-                'error': '',
-                'return_code': 0
-            }
+            return create_success_result('\n'.join(output_lines))
         else:
             # Afficher une variable spécifique
             var_name = args[0]
             value = os.environ.get(var_name)
 
             if value is not None:
-                return {
-                    'success': True,
-                    'output': f"{var_name}={value}",
-                    'error': '',
-                    'return_code': 0
-                }
+                return create_success_result(f"{var_name}={value}")
             else:
-                return {
-                    'success': False,
-                    'output': '',
-                    'error': f"env: {var_name}: Variable not set",
-                    'return_code': 1
-                }
+                return create_error_result(f"env: {var_name}: Variable not set", 1)
 
     def cmd_export(self, args: list) -> Dict[str, Any]:
         """Commande export - Exporter une variable d'environnement"""
         if not args:
-            return {
-                'success': False,
-                'output': '',
-                'error': "Usage: export VAR=value",
-                'return_code': 1
-            }
+            return create_error_result("Usage: export VAR=value", 1)
 
         assignment = ' '.join(args)
 
         if '=' not in assignment:
-            return {
-                'success': False,
-                'output': '',
-                'error': "Usage: export VAR=value",
-                'return_code': 1
-            }
+            return create_error_result("Usage: export VAR=value", 1)
 
         var_name, var_value = assignment.split('=', 1)
         var_name = var_name.strip()
@@ -335,12 +271,7 @@ EN MODE AGENT:
 
         os.environ[var_name] = var_value
 
-        return {
-            'success': True,
-            'output': '',
-            'error': '',
-            'return_code': 0
-        }
+        return create_success_result('')
 
     def cmd_echo(self, args: list) -> Dict[str, Any]:
         """Commande echo - Afficher un texte"""
@@ -354,12 +285,7 @@ EN MODE AGENT:
 
         output = re.sub(r'\$(\w+)', replace_var, output)
 
-        return {
-            'success': True,
-            'output': output,
-            'error': '',
-            'return_code': 0
-        }
+        return create_success_result(output)
 
     def get_builtin_names(self) -> list:
         """Retourne la liste des noms de commandes builtins"""

@@ -5,6 +5,9 @@ import os
 import shlex
 from typing import Dict, Optional, Tuple, Any
 
+from src.utils.command_helpers import create_success_result, create_error_result, SafeLogger
+from src.security import RiskAssessor
+
 class CommandExecutor:
     """Exécute des commandes shell de manière sécurisée"""
 
@@ -17,7 +20,8 @@ class CommandExecutor:
             logger: Logger pour les messages
         """
         self.settings = settings
-        self.logger = logger
+        self.logger = SafeLogger(logger)
+        self.risk_assessor = RiskAssessor()
         self.current_directory = os.getcwd()
 
     def execute(self, command: str, timeout: int = 30, strict_mode: bool = True) -> Dict[str, Any]:
@@ -33,12 +37,7 @@ class CommandExecutor:
             Dict avec 'success', 'output', 'error', 'return_code'
         """
         if not command or not command.strip():
-            return {
-                'success': False,
-                'output': '',
-                'error': 'Commande vide',
-                'return_code': -1
-            }
+            return create_error_result('Commande vide')
 
         # Gérer la commande cd séparément (change le working directory)
         if command.strip().startswith('cd '):
@@ -49,18 +48,11 @@ class CommandExecutor:
         # En mode permissif (MANUAL), validation minimale (seulement les commandes très dangereuses)
         is_safe, error_msg = self._validate_shell_command(command, strict_mode)
         if not is_safe:
-            if self.logger:
-                self.logger.error(f"Commande bloquée pour raisons de sécurité: {error_msg}")
-            return {
-                'success': False,
-                'output': '',
-                'error': f'Sécurité: {error_msg}',
-                'return_code': -1
-            }
+            self.logger.error(f"Commande bloquée pour raisons de sécurité: {error_msg}")
+            return create_error_result(f'Sécurité: {error_msg}')
 
         try:
-            if self.logger:
-                self.logger.info(f"Exécution de la commande: {command}")
+            self.logger.info(f"Exécution de la commande: {command}")
 
             # Exécuter la commande avec shell=True
             # Note: shell=True est nécessaire pour supporter les features shell (pipes, redirections, etc.)
@@ -79,40 +71,22 @@ class CommandExecutor:
             output = result.stdout.strip()
             error = result.stderr.strip()
 
-            if self.logger:
-                if success:
-                    self.logger.debug(f"Commande réussie. Output: {output[:200]}")
-                else:
-                    self.logger.warning(f"Commande échouée (code {result.returncode}). Error: {error[:200]}")
-
-            return {
-                'success': success,
-                'output': output,
-                'error': error,
-                'return_code': result.returncode
-            }
+            if success:
+                self.logger.debug(f"Commande réussie. Output: {output[:200]}")
+                return create_success_result(output, result.returncode)
+            else:
+                self.logger.warning(f"Commande échouée (code {result.returncode}). Error: {error[:200]}")
+                return create_error_result(error, result.returncode, output)
 
         except subprocess.TimeoutExpired:
             error_msg = f"Timeout: La commande a dépassé {timeout} secondes"
-            if self.logger:
-                self.logger.error(error_msg)
-            return {
-                'success': False,
-                'output': '',
-                'error': error_msg,
-                'return_code': -1
-            }
+            self.logger.error(error_msg)
+            return create_error_result(error_msg)
 
         except Exception as e:
             error_msg = f"Erreur lors de l'exécution: {str(e)}"
-            if self.logger:
-                self.logger.error(error_msg, exc_info=True)
-            return {
-                'success': False,
-                'output': '',
-                'error': error_msg,
-                'return_code': -1
-            }
+            self.logger.error(error_msg, exc_info=True)
+            return create_error_result(error_msg)
 
     def _handle_cd(self, command: str) -> Dict[str, Any]:
         """
@@ -139,32 +113,15 @@ class CommandExecutor:
         try:
             if os.path.isdir(target_dir):
                 self.current_directory = target_dir
-                if self.logger:
-                    self.logger.info(f"Répertoire changé vers: {self.current_directory}")
-                return {
-                    'success': True,
-                    'output': f"Répertoire changé vers: {self.current_directory}",
-                    'error': '',
-                    'return_code': 0
-                }
+                self.logger.info(f"Répertoire changé vers: {self.current_directory}")
+                return create_success_result(f"Répertoire changé vers: {self.current_directory}")
             else:
                 error_msg = f"Répertoire introuvable: {target_dir}"
-                return {
-                    'success': False,
-                    'output': '',
-                    'error': error_msg,
-                    'return_code': 1
-                }
+                return create_error_result(error_msg, 1)
         except Exception as e:
             error_msg = f"Erreur lors du changement de répertoire: {str(e)}"
-            if self.logger:
-                self.logger.error(error_msg)
-            return {
-                'success': False,
-                'output': '',
-                'error': error_msg,
-                'return_code': 1
-            }
+            self.logger.error(error_msg)
+            return create_error_result(error_msg, 1)
 
     def execute_safe(self, command: str, require_confirmation: bool = False) -> Dict[str, Any]:
         """
@@ -177,28 +134,14 @@ class CommandExecutor:
         Returns:
             Résultat de l'exécution ou erreur
         """
-        risk_level = self._assess_risk(command)
+        assessment = self.risk_assessor.assess_risk(command)
 
-        if risk_level == 'high' and require_confirmation:
-            return {
-                'success': False,
-                'output': '',
-                'error': 'CONFIRMATION_REQUIRED',
-                'return_code': -1,
-                'risk_level': risk_level
-            }
+        if assessment.level.value in ['high', 'blocked'] and require_confirmation:
+            result = create_error_result('CONFIRMATION_REQUIRED')
+            result['risk_level'] = assessment.level.value
+            return result
 
         return self.execute(command)
-
-    def _assess_risk(self, command: str) -> str:
-        """Évalue le niveau de risque (délégué au parser normalement)"""
-        # Version simplifiée pour l'exécuteur
-        dangerous_commands = ['rm', 'rmdir', 'dd', 'mkfs', 'shutdown', 'reboot', 'kill']
-        cmd_base = command.split()[0] if command else ""
-
-        if cmd_base in dangerous_commands or 'sudo' in command or '-rf' in command:
-            return 'high'
-        return 'low'
 
     def _validate_shell_command(self, command: str, strict_mode: bool = True) -> Tuple[bool, str]:
         """
@@ -223,8 +166,7 @@ class CommandExecutor:
         # En mode MANUAL (strict_mode=False), on autorise pipes, redirections, etc.
         # On bloque seulement les commandes vraiment dangereuses
         if not strict_mode:
-            if self.logger:
-                self.logger.debug(f"Exécution en mode permissif: {command[:100]}")
+            self.logger.debug(f"Exécution en mode permissif: {command[:100]}")
             return True, ""
 
         # En mode strict (AUTO/AGENT), on surveille les patterns à risque
@@ -247,7 +189,7 @@ class CommandExecutor:
                 warnings.append(message)
 
         # Si des warnings en mode strict, logger mais autoriser (pour compatibilité)
-        if warnings and self.logger:
+        if warnings:
             self.logger.warning(f"Commande avec patterns à risque: {', '.join(warnings)}")
             self.logger.warning(f"Commande: {command[:100]}")
 

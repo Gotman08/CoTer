@@ -5,6 +5,9 @@ from typing import Tuple, List, Dict, Any
 from collections import deque
 from datetime import datetime, timedelta
 
+from src.utils.command_helpers import SafeLogger
+from src.security import RiskAssessor
+
 class SecurityValidator:
     """Validateur de sécurité pour les commandes shell"""
 
@@ -63,7 +66,8 @@ class SecurityValidator:
         Args:
             logger: Logger pour les messages
         """
-        self.logger = logger
+        self.logger = SafeLogger(logger)
+        self.risk_assessor = RiskAssessor()
 
         # Phase 2: Historique des commandes pour détection de patterns suspects
         self.command_history = deque(maxlen=100)  # Garde les 100 dernières commandes
@@ -75,7 +79,7 @@ class SecurityValidator:
 
     def validate_command(self, command: str) -> Tuple[bool, str, str]:
         """
-        Valide une commande pour la sécurité
+        Valide une commande pour la sécurité en utilisant le RiskAssessor centralisé
 
         Args:
             command: La commande à valider
@@ -86,49 +90,21 @@ class SecurityValidator:
             - risk_level: 'low', 'medium', 'high', ou 'blocked'
             - reason: Raison du blocage ou avertissement
         """
-        if not command or not command.strip():
-            return False, 'blocked', "Commande vide"
+        # Utiliser le RiskAssessor centralisé pour toute l'évaluation
+        assessment = self.risk_assessor.assess_risk(command)
 
-        command_lower = command.lower().strip()
+        # Logger si bloqué ou à haut risque
+        if assessment.blocked:
+            self.logger.warning(f"Commande bloquée: {command}")
+        elif assessment.level.value == 'high':
+            self.logger.warning(f"Commande à haut risque: {command}")
 
-        # Vérifier la liste noire
-        for blacklisted in self.BLACKLISTED_COMMANDS:
-            if blacklisted.lower() in command_lower:
-                if self.logger:
-                    self.logger.warning(f"Commande bloquée (liste noire): {command}")
-                return False, 'blocked', f"Commande interdite détectée: {blacklisted}"
+        # Retourner au format attendu par l'appelant
+        is_valid = not assessment.blocked
+        risk_level = assessment.level.value
+        reason = "; ".join(assessment.reasons) if assessment.reasons else "OK"
 
-        # Vérifier les patterns dangereux
-        for pattern in self.DANGEROUS_PATTERNS:
-            if re.search(pattern, command, re.IGNORECASE):
-                if self.logger:
-                    self.logger.warning(f"Pattern dangereux détecté: {command}")
-                return False, 'blocked', "Pattern dangereux détecté dans la commande"
-
-        # Vérifier les chemins protégés
-        for protected_path in self.PROTECTED_PATHS:
-            if f" {protected_path}" in command or f"={protected_path}" in command:
-                if any(risky in command for risky in ['rm', 'rmdir', 'chmod', 'chown']):
-                    if self.logger:
-                        self.logger.warning(f"Tentative de modification de chemin protégé: {command}")
-                    return False, 'blocked', f"Modification de {protected_path} interdite"
-
-        # Vérifier les commandes à haut risque
-        cmd_base = command.split()[0] if command else ""
-        for high_risk in self.HIGH_RISK_COMMANDS:
-            if cmd_base == high_risk or command.startswith(high_risk):
-                return True, 'high', f"Commande à haut risque: {high_risk}"
-
-        # Vérifier la présence de sudo
-        if 'sudo' in command_lower:
-            return True, 'high', "Utilisation de sudo détectée"
-
-        # Vérifier les pipes et redirections
-        if '|' in command or '>' in command or '<' in command:
-            return True, 'medium', "Utilisation de pipes ou redirections"
-
-        # Commande semble sûre
-        return True, 'low', "Commande sûre"
+        return is_valid, risk_level, reason
 
     def requires_confirmation(self, risk_level: str) -> bool:
         """
@@ -209,6 +185,7 @@ Voulez-vous vraiment exécuter cette commande? (oui/non)"""
     def calculate_risk_score(self, command: str) -> int:
         """
         Calcule un score de risque numérique pour une commande (0-100)
+        Utilise le RiskAssessor centralisé
 
         Args:
             command: Commande à analyser
@@ -216,64 +193,8 @@ Voulez-vous vraiment exécuter cette commande? (oui/non)"""
         Returns:
             Score de risque (0 = sûr, 100 = très dangereux)
         """
-        score = 0
-        command_lower = command.lower().strip()
-
-        # Vérifier la whitelist (commandes sûres)
-        cmd_base = command.split()[0] if command else ""
-        if any(safe in command for safe in self.SAFE_COMMANDS):
-            return 0  # Commande whitelistée = sûre
-
-        # Blacklist = score maximum
-        for blacklisted in self.BLACKLISTED_COMMANDS:
-            if blacklisted.lower() in command_lower:
-                return 100
-
-        # Patterns dangereux = +50
-        for pattern in self.DANGEROUS_PATTERNS:
-            if re.search(pattern, command, re.IGNORECASE):
-                score += 50
-
-        # Commandes à haut risque = +40
-        for high_risk in self.HIGH_RISK_COMMANDS:
-            if cmd_base == high_risk or command.startswith(high_risk):
-                score += 40
-                break
-
-        # Chemins protégés = +30
-        for protected_path in self.PROTECTED_PATHS:
-            if protected_path in command:
-                if any(risky in command for risky in ['rm', 'rmdir', 'chmod', 'chown']):
-                    score += 30
-                    break
-
-        # Sudo = +20
-        if 'sudo' in command_lower:
-            score += 20
-
-        # Force flags = +15
-        if '-f' in command or '--force' in command:
-            score += 15
-
-        # Recursive flags = +10
-        if '-r' in command or '-R' in command or '--recursive' in command:
-            score += 10
-
-        # Pipes et redirections = +10
-        if '|' in command:
-            score += 10
-        if '>' in command or '>>' in command:
-            score += 5
-
-        # Network operations = +15
-        if any(net in command_lower for net in ['wget', 'curl', 'nc', 'netcat', 'telnet']):
-            score += 15
-
-        # Package management = +10
-        if any(pkg in command_lower for pkg in ['apt', 'yum', 'dnf', 'pacman', 'pip install']):
-            score += 10
-
-        return min(score, 100)  # Cap à 100
+        assessment = self.risk_assessor.assess_risk(command)
+        return assessment.score
 
     def detect_suspicious_patterns(self) -> List[str]:
         """

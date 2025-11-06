@@ -3,6 +3,9 @@
 import re
 from typing import Dict, Optional, List
 
+from src.utils.command_helpers import SafeLogger
+from src.security import RiskAssessor
+
 class CommandParser:
     """Parse les demandes utilisateur et génère des commandes shell appropriées"""
 
@@ -15,7 +18,8 @@ class CommandParser:
             logger: Logger pour les messages
         """
         self.ollama_client = ollama_client
-        self.logger = logger
+        self.logger = SafeLogger(logger)
+        self.risk_assessor = RiskAssessor()
         self.command_history = []
 
     def parse_user_request(self, user_input: str) -> Dict[str, any]:
@@ -58,8 +62,7 @@ Maintenant, analyse cette demande et réponds:"""
             return self._process_ai_response(response, user_input)
 
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Erreur lors du parsing: {e}")
+            self.logger.error(f"Erreur lors du parsing: {e}")
             return {
                 'command': None,
                 'explanation': f"Erreur lors de l'analyse de votre demande: {e}",
@@ -111,13 +114,13 @@ Si la demande n'est pas une action système, préfixe par [NO_COMMAND]."""
         # Nettoyer la réponse (enlever markdown, etc.)
         command = self._clean_command(response)
 
-        # Déterminer le niveau de risque
-        risk_level = self._assess_risk(command)
+        # Déterminer le niveau de risque avec le RiskAssessor centralisé
+        assessment = self.risk_assessor.assess_risk(command)
 
         return {
             'command': command,
             'explanation': f"Commande générée: {command}",
-            'risk_level': risk_level,
+            'risk_level': assessment.level.value,
             'original_request': original_request
         }
 
@@ -136,50 +139,6 @@ Si la demande n'est pas une action système, préfixe par [NO_COMMAND]."""
             return lines[0]
 
         return response.strip()
-
-    def _assess_risk(self, command: str) -> str:
-        """
-        Évalue le niveau de risque d'une commande
-
-        Args:
-            command: La commande à évaluer
-
-        Returns:
-            'low', 'medium', ou 'high'
-        """
-        if not command:
-            return 'none'
-
-        cmd_base = command.split()[0] if command else ""
-
-        # Commandes à haut risque
-        high_risk = ['rm', 'rmdir', 'dd', 'mkfs', 'fdisk', 'parted',
-                     'shutdown', 'reboot', 'init', 'halt', 'poweroff',
-                     'kill', 'killall', 'pkill']
-
-        # Commandes à risque moyen
-        medium_risk = ['mv', 'cp', 'chmod', 'chown', 'chgrp',
-                       'useradd', 'userdel', 'groupadd', 'groupdel',
-                       'systemctl', 'service', 'iptables']
-
-        # Patterns dangereux
-        dangerous_patterns = [
-            r'rm\s+.*-rf',  # rm avec force récursif
-            r'>\s*/dev/',   # Redirection vers device
-            r'chmod\s+777', # Permissions trop permissives
-            r'sudo',        # Utilisation de sudo
-        ]
-
-        for pattern in dangerous_patterns:
-            if re.search(pattern, command):
-                return 'high'
-
-        if cmd_base in high_risk or 'sudo' in command:
-            return 'high'
-        elif cmd_base in medium_risk:
-            return 'medium'
-        else:
-            return 'low'
 
     def _handle_special_command(self, command: str) -> Dict[str, any]:
         """Gère les commandes spéciales (commençant par /)"""

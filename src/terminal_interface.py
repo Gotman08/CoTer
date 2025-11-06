@@ -11,6 +11,7 @@ from src.utils import (
     StatsDisplayer, InputValidator, UIFormatter
 )
 from src.core import ShellEngine, ShellMode, HistoryManager, BuiltinCommands
+from src.utils.command_helpers import CommandResultHandler, handle_command_errors
 from config import prompts, project_templates, constants
 
 class TerminalInterface:
@@ -47,6 +48,9 @@ class TerminalInterface:
         self.ui = UIFormatter()
         self.stats_displayer = StatsDisplayer(self.ui)
         self.input_validator = InputValidator()
+
+        # Initialiser le gestionnaire de résultats unifié (Refactoring Phase 1.3)
+        self.result_handler = CommandResultHandler(self)
 
         # Initialisation des composants
         self.logger.info("Initialisation des composants...")
@@ -348,28 +352,13 @@ class TerminalInterface:
             # Vérifier si c'est une commande builtin
             if self.builtins.is_builtin(user_input):
                 result = self.builtins.execute(user_input)
-                if result is None:
-                    # Pas vraiment builtin, passer à l'exécution normale
-                    pass
-                else:
-                    # Commande builtin exécutée
-                    # Afficher le résultat
-                    self._display_result(result)
-
-                    # Ajouter à l'historique persistant
-                    self.history_manager.add_command(
+                if result is not None:
+                    # Commande builtin exécutée - utiliser le handler unifié
+                    self.result_handler.handle_result(
+                        result=result,
                         command=user_input,
-                        mode="manual",
-                        success=result['success']
-                    )
-
-                    # Logger la commande
-                    self.command_logger.log_command(
                         user_input=user_input,
-                        command=user_input,
-                        success=result['success'],
-                        output=result.get('output', ''),
-                        error=result.get('error', '')
+                        mode="manual"
                     )
                     return
 
@@ -377,23 +366,12 @@ class TerminalInterface:
             # strict_mode=False pour autoriser pipes, redirections, etc.
             result = self.executor.execute(user_input, strict_mode=False)
 
-            # Afficher le résultat
-            self._display_result(result)
-
-            # Ajouter à l'historique persistant
-            self.history_manager.add_command(
+            # Traiter le résultat via le handler unifié (display + history + logging)
+            self.result_handler.handle_result(
+                result=result,
                 command=user_input,
-                mode="manual",
-                success=result['success']
-            )
-
-            # Logger la commande
-            self.command_logger.log_command(
                 user_input=user_input,
-                command=user_input,  # En mode manual, la commande = l'input
-                success=result['success'],
-                output=result.get('output', ''),
-                error=result.get('error', '')
+                mode="manual"
             )
 
         except Exception as e:
@@ -459,24 +437,8 @@ class TerminalInterface:
             print(f"\n⚙️  Exécution...")
             result = self.executor.execute(command)
 
-            # Afficher le résultat
-            self._display_result(result)
-
-            # Ajouter à l'historique persistant
-            self.history_manager.add_command(
-                command=command,
-                mode="auto",
-                success=result['success']
-            )
-
-            # Logger la commande
-            self.command_logger.log_command(
-                user_input=user_input,
-                command=command,
-                success=result['success'],
-                output=result.get('output', ''),
-                error=result.get('error', '')
-            )
+            # Traiter le résultat (affichage + historique + logging)
+            self.result_handler.handle_result(result, command, user_input, "auto")
 
             # Phase 2: Enregistrer dans l'historique de sécurité
             self.security.record_command_execution(
