@@ -19,8 +19,9 @@ class Settings:
         self.auto_warmup = os.getenv("AUTO_WARMUP", "true").lower() == "true"  # Préchauffer le modèle au démarrage
 
         # Configuration streaming IA (affichage en temps réel du raisonnement)
-        self.enable_ai_streaming = os.getenv("ENABLE_AI_STREAMING", "true").lower() == "true"  # Streaming de la réponse IA
-        self.show_ai_reasoning = os.getenv("SHOW_AI_REASONING", "true").lower() == "true"  # Afficher le raisonnement détaillé avec balises
+        # TOUJOURS ACTIVÉ - Meilleure expérience utilisateur
+        self.enable_ai_streaming = True  # Streaming de la réponse IA (permanent)
+        self.show_ai_reasoning = True    # Afficher le raisonnement détaillé avec balises (permanent)
 
         # Configuration du terminal
         self.prompt_symbol = "🤖 IA>"

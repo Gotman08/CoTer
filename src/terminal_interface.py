@@ -591,33 +591,19 @@ class TerminalInterface:
                     else:
                         self.console.warning("Mode agent annulé, traitement en mode commande simple")
 
-            # Parser la demande (avec ou sans streaming selon la configuration)
-            if self.settings.enable_ai_streaming and self.settings.show_ai_reasoning:
-                # Mode streaming: affichage en temps réel avec balises
-                self.console.info("Analyse de votre demande...")
-                parsed = self._stream_ai_response_with_tags(user_input)
-            else:
-                # Mode classique: avec spinner
-                with self.console.create_status("Génération de la commande...") as status:
-                    parsed = self.parser.parse_user_request(user_input)
+            # Parser la demande avec streaming (affichage en temps réel avec balises)
+            self.console.info("Analyse de votre demande...")
+            parsed = self._stream_ai_response_with_tags(user_input)
 
             command = parsed.get('command')
             risk_level = parsed.get('risk_level', 'unknown')
             explanation = parsed.get('explanation', '')
 
             if not command:
-                # Pas de commande générée
-                if self.settings.enable_ai_streaming:
-                    # Le message a déjà été affiché via les balises
-                    pass
-                else:
-                    # Afficher l'explication
-                    self.console.print(explanation)
+                # Pas de commande générée - le message a déjà été affiché via les balises
                 return
 
-            # Afficher la commande si pas en mode streaming (déjà affiché via balises sinon)
-            if not self.settings.enable_ai_streaming:
-                self.console.info(f"Commande générée: {command}")
+            # La commande a déjà été affichée via les balises [Commande]
 
             # Valider la sécurité
             is_valid, security_level, security_reason = self.security.validate_command(command)
