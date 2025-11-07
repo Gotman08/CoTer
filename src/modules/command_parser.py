@@ -24,24 +24,18 @@ class CommandParser:
         self.command_history = []
         self.tag_parser = TagParser()
 
-    def parse_user_request(self, user_input: str, stream: bool = False):
+    def parse_user_request(self, user_input: str) -> Dict[str, any]:
         """
-        Parse la demande utilisateur et retourne une commande shell
+        Parse la demande utilisateur et retourne une commande shell (mode non-streaming)
 
         Args:
             user_input: La demande de l'utilisateur en langage naturel
-            stream: Si True, retourne un générateur pour le streaming
 
         Returns:
             Dict avec 'command', 'explanation', 'risk_level', 'parsed_sections'
-            OU générateur de tokens si stream=True
         """
         # Vérifier si c'est une commande spéciale
         if user_input.startswith('/'):
-            if stream:
-                # Pour les commandes spéciales, pas de streaming
-                yield from []
-                return self._handle_special_command(user_input)
             return self._handle_special_command(user_input)
 
         # Utiliser l'IA pour parser la demande
@@ -53,26 +47,58 @@ class CommandParser:
 Analyse cette demande et génère la commande appropriée."""
 
         try:
-            if stream:
-                # Mode streaming: retourner un générateur
-                return self._stream_parse(prompt, system_prompt, user_input)
-            else:
-                # Mode non-streaming: comportement classique
-                response = self.ollama_client.generate(prompt, system_prompt=system_prompt)
-                return self._process_ai_response(response, user_input)
+            # Mode non-streaming: comportement classique
+            response = self.ollama_client.generate(prompt, system_prompt=system_prompt)
+            return self._process_ai_response(response, user_input)
 
         except Exception as e:
             self.logger.error(f"Erreur lors du parsing: {e}")
-            error_result = {
+            return {
                 'command': None,
                 'explanation': f"Erreur lors de l'analyse de votre demande: {e}",
                 'risk_level': 'unknown',
                 'parsed_sections': {}
             }
-            if stream:
-                yield from []
-                return error_result
-            return error_result
+
+    def parse_user_request_stream(self, user_input: str):
+        """
+        Parse la demande utilisateur en mode streaming
+
+        Args:
+            user_input: La demande de l'utilisateur en langage naturel
+
+        Yields:
+            Tokens de la réponse IA
+
+        Returns:
+            Dict avec 'command', 'explanation', 'risk_level', 'parsed_sections'
+        """
+        # Vérifier si c'est une commande spéciale
+        if user_input.startswith('/'):
+            # Pour les commandes spéciales, pas de streaming
+            yield from []
+            return self._handle_special_command(user_input)
+
+        # Utiliser l'IA pour parser la demande
+        system_prompt = self._get_parsing_system_prompt()
+
+        prompt = f"""Demande utilisateur: "{user_input}"
+
+Analyse cette demande et génère la commande appropriée."""
+
+        try:
+            # Mode streaming: retourner un générateur
+            return self._stream_parse(prompt, system_prompt, user_input)
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors du streaming: {e}")
+            yield from []
+            return {
+                'command': None,
+                'explanation': f"Erreur lors du streaming: {e}",
+                'risk_level': 'unknown',
+                'parsed_sections': {}
+            }
 
     def _stream_parse(self, prompt: str, system_prompt: str, user_input: str):
         """

@@ -479,7 +479,7 @@ class TerminalInterface:
         self.console.print()  # Ligne vide avant
 
         # Obtenir le générateur de streaming
-        stream_gen = self.parser.parse_user_request(user_input, stream=True)
+        stream_gen = self.parser.parse_user_request_stream(user_input)
 
         # Variables pour tracking des balises
         accumulated_text = ""
@@ -599,7 +599,7 @@ class TerminalInterface:
             else:
                 # Mode classique: avec spinner
                 with self.console.create_status("Génération de la commande...") as status:
-                    parsed = self.parser.parse_user_request(user_input, stream=False)
+                    parsed = self.parser.parse_user_request(user_input)
 
             command = parsed.get('command')
             risk_level = parsed.get('risk_level', 'unknown')
