@@ -4,6 +4,7 @@ import re
 from typing import Dict, Optional, List
 
 from src.utils.command_helpers import SafeLogger
+from src.utils.tag_parser import TagParser
 from src.security import RiskAssessor
 
 class CommandParser:
@@ -21,52 +22,98 @@ class CommandParser:
         self.logger = SafeLogger(logger)
         self.risk_assessor = RiskAssessor()
         self.command_history = []
+        self.tag_parser = TagParser()
 
-    def parse_user_request(self, user_input: str) -> Dict[str, any]:
+    def parse_user_request(self, user_input: str, stream: bool = False):
         """
         Parse la demande utilisateur et retourne une commande shell
 
         Args:
             user_input: La demande de l'utilisateur en langage naturel
+            stream: Si True, retourne un générateur pour le streaming
 
         Returns:
-            Dict avec 'command', 'explanation', 'risk_level'
+            Dict avec 'command', 'explanation', 'risk_level', 'parsed_sections'
+            OU générateur de tokens si stream=True
         """
         # Vérifier si c'est une commande spéciale
         if user_input.startswith('/'):
+            if stream:
+                # Pour les commandes spéciales, pas de streaming
+                yield from []
+                return self._handle_special_command(user_input)
             return self._handle_special_command(user_input)
 
         # Utiliser l'IA pour parser la demande
         system_prompt = self._get_parsing_system_prompt()
 
+        # Le prompt est maintenant obsolète car le system_prompt gère déjà les balises
         prompt = f"""Demande utilisateur: "{user_input}"
 
-Génère UNIQUEMENT la commande shell Linux correspondante. Ne fournis AUCUNE explication, juste la commande.
-Si la commande est dangereuse ou destructive, commence ta réponse par [DANGER].
-Si aucune commande shell n'est appropriée, réponds SEULEMENT par [NO_COMMAND] suivi d'une brève explication.
-
-Exemples:
-Demande: "liste les fichiers"
-Réponse: ls -la
-
-Demande: "montre l'espace disque"
-Réponse: df -h
-
-Demande: "supprime tous les fichiers"
-Réponse: [DANGER] rm -rf *
-
-Maintenant, analyse cette demande et réponds:"""
+Analyse cette demande et génère la commande appropriée."""
 
         try:
-            response = self.ollama_client.generate(prompt, system_prompt=system_prompt)
-            return self._process_ai_response(response, user_input)
+            if stream:
+                # Mode streaming: retourner un générateur
+                return self._stream_parse(prompt, system_prompt, user_input)
+            else:
+                # Mode non-streaming: comportement classique
+                response = self.ollama_client.generate(prompt, system_prompt=system_prompt)
+                return self._process_ai_response(response, user_input)
 
         except Exception as e:
             self.logger.error(f"Erreur lors du parsing: {e}")
-            return {
+            error_result = {
                 'command': None,
                 'explanation': f"Erreur lors de l'analyse de votre demande: {e}",
-                'risk_level': 'unknown'
+                'risk_level': 'unknown',
+                'parsed_sections': {}
+            }
+            if stream:
+                yield from []
+                return error_result
+            return error_result
+
+    def _stream_parse(self, prompt: str, system_prompt: str, user_input: str):
+        """
+        Parse en mode streaming - yield les tokens au fur et à mesure
+
+        Args:
+            prompt: Prompt utilisateur
+            system_prompt: Prompt système
+            user_input: Input original de l'utilisateur
+
+        Yields:
+            Tokens de la réponse IA
+
+        Returns:
+            Dict final avec la commande parsée
+        """
+        # Générer la réponse en streaming
+        stream_generator = self.ollama_client.generate(
+            prompt,
+            system_prompt=system_prompt,
+            stream=True
+        )
+
+        # Accumuler la réponse complète tout en yieldant les tokens
+        full_response = ""
+        try:
+            for token in stream_generator:
+                full_response += token
+                yield token
+
+            # Une fois le streaming terminé, parser la réponse complète
+            result = self._process_ai_response(full_response, user_input)
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors du streaming: {e}")
+            return {
+                'command': None,
+                'explanation': f"Erreur lors du streaming: {e}",
+                'risk_level': 'unknown',
+                'parsed_sections': {}
             }
 
     def _get_parsing_system_prompt(self) -> str:
@@ -80,48 +127,68 @@ Si la demande n'est pas une action système, préfixe par [NO_COMMAND]."""
 
     def _process_ai_response(self, response: str, original_request: str) -> Dict[str, any]:
         """
-        Traite la réponse de l'IA
+        Traite la réponse de l'IA avec support des balises
 
         Args:
-            response: Réponse brute de l'IA
+            response: Réponse brute de l'IA (peut contenir des balises)
             original_request: Demande originale de l'utilisateur
 
         Returns:
-            Dict structuré avec les informations de commande
+            Dict structuré avec les informations de commande et sections parsées
         """
         response = response.strip()
 
+        # Parser la réponse pour extraire les balises
+        parsed_sections = self.tag_parser.parse(response)
+
+        # Vérifier si aucune commande n'est appropriée
+        if self.tag_parser.has_tag(parsed_sections, 'no Commande') or \
+           self.tag_parser.has_tag(parsed_sections, 'NO_COMMAND'):
+            explanation = self.tag_parser.get_tag_content(parsed_sections, 'no Commande') or \
+                         self.tag_parser.get_tag_content(parsed_sections, 'NO_COMMAND') or \
+                         "Je ne peux pas convertir cela en commande shell."
+            return {
+                'command': None,
+                'explanation': explanation,
+                'risk_level': 'none',
+                'original_request': original_request,
+                'parsed_sections': parsed_sections
+            }
+
+        # Extraire la commande (cherche dans [Commande] ou [DANGER])
+        command = self.tag_parser.extract_command(parsed_sections)
+
+        # Si aucune commande n'est trouvée dans les balises, fallback sur l'ancienne méthode
+        if command is None:
+            # Pas de balises utilisées - nettoyer la réponse brute
+            command = self._clean_command(response)
+
         # Vérifier si c'est une commande dangereuse
-        if response.startswith('[DANGER]'):
-            command = response.replace('[DANGER]', '').strip()
+        is_danger = self.tag_parser.has_tag(parsed_sections, 'DANGER')
+
+        if is_danger:
             return {
                 'command': command,
                 'explanation': "Commande dangereuse détectée",
                 'risk_level': 'high',
-                'original_request': original_request
+                'original_request': original_request,
+                'parsed_sections': parsed_sections
             }
-
-        # Vérifier si aucune commande n'est appropriée
-        if response.startswith('[NO_COMMAND]'):
-            explanation = response.replace('[NO_COMMAND]', '').strip()
-            return {
-                'command': None,
-                'explanation': explanation or "Je ne peux pas convertir cela en commande shell.",
-                'risk_level': 'none',
-                'original_request': original_request
-            }
-
-        # Nettoyer la réponse (enlever markdown, etc.)
-        command = self._clean_command(response)
 
         # Déterminer le niveau de risque avec le RiskAssessor centralisé
         assessment = self.risk_assessor.assess_risk(command)
 
+        # Construire l'explication depuis les balises si disponible
+        explanation = self.tag_parser.get_tag_content(parsed_sections, 'Description')
+        if not explanation:
+            explanation = f"Commande générée: {command}"
+
         return {
             'command': command,
-            'explanation': f"Commande générée: {command}",
+            'explanation': explanation,
             'risk_level': assessment.level.value,
-            'original_request': original_request
+            'original_request': original_request,
+            'parsed_sections': parsed_sections
         }
 
     def _clean_command(self, response: str) -> str:

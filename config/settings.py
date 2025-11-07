@@ -18,6 +18,10 @@ class Settings:
         self.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", "120"))
         self.auto_warmup = os.getenv("AUTO_WARMUP", "true").lower() == "true"  # Préchauffer le modèle au démarrage
 
+        # Configuration streaming IA (affichage en temps réel du raisonnement)
+        self.enable_ai_streaming = os.getenv("ENABLE_AI_STREAMING", "true").lower() == "true"  # Streaming de la réponse IA
+        self.show_ai_reasoning = os.getenv("SHOW_AI_REASONING", "true").lower() == "true"  # Afficher le raisonnement détaillé avec balises
+
         # Configuration du terminal
         self.prompt_symbol = "🤖 IA>"
         self.max_history = 100

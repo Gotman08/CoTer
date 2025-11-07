@@ -8,10 +8,12 @@ from src.utils import (
     CommandLogger,
     InputValidator
 )
+from src.utils.tag_parser import TagParser
 from src.security import SecurityValidator
 from src.core import ShellEngine, ShellMode, HistoryManager, BuiltinCommands
 from src.utils.command_helpers import CommandResultHandler, handle_command_errors
 from src.terminal.display_manager import DisplayManager
+from src.terminal.tag_display import TagDisplay
 from src.terminal.rich_console import get_console
 from src.terminal import rich_components
 from config import prompts, project_templates, constants
@@ -51,6 +53,8 @@ class TerminalInterface:
 
         # Initialiser les utilitaires d'affichage (Refactoring)
         self.input_validator = InputValidator()
+        self.tag_display = TagDisplay(self.console)  # Affichage des balises IA
+        self.tag_parser = TagParser()  # Parser de balises
 
         # Initialiser le gestionnaire de résultats unifié (Refactoring Phase 1.3)
         self.result_handler = CommandResultHandler(self)
@@ -462,6 +466,101 @@ class TerminalInterface:
             self.logger.error(f"Erreur mode manuel: {e}", exc_info=True)
             self.console.error(f"Erreur: {e}")
 
+    def _stream_ai_response_with_tags(self, user_input: str) -> dict:
+        """
+        Stream la réponse IA avec affichage des balises en temps réel
+
+        Args:
+            user_input: Demande utilisateur
+
+        Returns:
+            Dict avec command, explanation, risk_level, parsed_sections
+        """
+        self.console.print()  # Ligne vide avant
+
+        # Obtenir le générateur de streaming
+        stream_gen = self.parser.parse_user_request(user_input, stream=True)
+
+        # Variables pour tracking des balises
+        accumulated_text = ""
+        current_tag = None
+        tag_content = ""
+        in_tag = False
+
+        try:
+            # Consommer le stream token par token
+            for token in stream_gen:
+                accumulated_text += token
+
+                # Détecter les balises au fur et à mesure
+                # Chercher les patterns [Tag] dans le texte accumulé
+                if '[' in token:
+                    in_tag = True
+
+                if in_tag and ']' in token:
+                    # Une balise vient d'être complétée, l'extraire
+                    tag_match = accumulated_text.rfind('[')
+                    if tag_match != -1:
+                        tag_end = accumulated_text.find(']', tag_match)
+                        if tag_end != -1:
+                            # Balise détectée
+                            potential_tag = accumulated_text[tag_match+1:tag_end]
+
+                            # Si c'est une balise connue, afficher la section précédente
+                            if self.tag_parser.is_known_tag(potential_tag):
+                                # Afficher le contenu précédent si existant
+                                if current_tag and tag_content.strip():
+                                    self.tag_display.display_tag(current_tag, tag_content.strip())
+
+                                # Nouvelle balise détectée
+                                current_tag = potential_tag
+                                tag_content = ""
+                                in_tag = False
+                                continue
+
+                # Accumuler le contenu de la balise courante
+                if current_tag and not in_tag:
+                    tag_content += token
+                elif not current_tag:
+                    # Pas encore de balise, afficher brut
+                    self.console.print(token, end="")
+
+            # Afficher la dernière section si existante
+            if current_tag and tag_content.strip():
+                self.tag_display.display_tag(current_tag, tag_content.strip())
+
+            self.console.print()  # Ligne vide après
+
+            # Récupérer le résultat final du générateur
+            try:
+                result = stream_gen.gi_frame and stream_gen.send(None)
+                if result is None:
+                    # Le générateur n'a pas retourné de valeur, essayer la valeur de retour
+                    result = getattr(stream_gen, 'gi_code', None)
+            except StopIteration as e:
+                result = e.value if hasattr(e, 'value') else None
+
+            # Si pas de résultat, parser manuellement le texte accumulé
+            if result is None:
+                result = self.parser._process_ai_response(accumulated_text, user_input)
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors du streaming: {e}", exc_info=True)
+            self.console.error(f"Erreur streaming: {e}")
+
+            # Fallback: parser le texte accumulé
+            if accumulated_text:
+                return self.parser._process_ai_response(accumulated_text, user_input)
+
+            return {
+                'command': None,
+                'explanation': f"Erreur lors du streaming: {e}",
+                'risk_level': 'unknown',
+                'parsed_sections': {}
+            }
+
     def _handle_auto_mode(self, user_input: str):
         """
         Gère les commandes en mode AUTO (avec IA)
@@ -492,20 +591,33 @@ class TerminalInterface:
                     else:
                         self.console.warning("Mode agent annulé, traitement en mode commande simple")
 
-            # Parser la demande en mode normal avec spinner
-            with self.console.create_status("Génération de la commande...") as status:
-                parsed = self.parser.parse_user_request(user_input)
+            # Parser la demande (avec ou sans streaming selon la configuration)
+            if self.settings.enable_ai_streaming and self.settings.show_ai_reasoning:
+                # Mode streaming: affichage en temps réel avec balises
+                self.console.info("Analyse de votre demande...")
+                parsed = self._stream_ai_response_with_tags(user_input)
+            else:
+                # Mode classique: avec spinner
+                with self.console.create_status("Génération de la commande...") as status:
+                    parsed = self.parser.parse_user_request(user_input, stream=False)
 
             command = parsed.get('command')
             risk_level = parsed.get('risk_level', 'unknown')
             explanation = parsed.get('explanation', '')
 
             if not command:
-                self.console.print(explanation)
+                # Pas de commande générée
+                if self.settings.enable_ai_streaming:
+                    # Le message a déjà été affiché via les balises
+                    pass
+                else:
+                    # Afficher l'explication
+                    self.console.print(explanation)
                 return
 
-            # Afficher la commande générée
-            self.console.info(f"Commande générée: {command}")
+            # Afficher la commande si pas en mode streaming (déjà affiché via balises sinon)
+            if not self.settings.enable_ai_streaming:
+                self.console.info(f"Commande générée: {command}")
 
             # Valider la sécurité
             is_valid, security_level, security_reason = self.security.validate_command(command)
