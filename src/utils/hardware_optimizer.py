@@ -442,6 +442,58 @@ class HardwareOptimizer:
             'thermal_status': thermal['status']
         }
 
+    def get_optimization_report_dict(self) -> Dict[str, Any]:
+        """
+        Génère un rapport d'optimisation sous forme de dictionnaire
+        (pour affichage avec Rich)
+
+        Returns:
+            Dictionnaire avec les informations hardware et optimisations
+        """
+        params = self.get_optimized_params()
+        mem_status = self.get_memory_status()
+        thermal = self.check_thermal_throttling()
+
+        # Informations de base
+        device = self.hardware_info['device_type'].replace('_', ' ').title()
+
+        # Ajouter chipset si Raspberry Pi
+        if self.hardware_info['is_raspberry_pi']:
+            chipset = self.hardware_info.get('pi_chipset', 'Unknown')
+            device = f"{device} ({chipset})"
+
+        # Format RAM
+        ram_info = f"{mem_status['ram_total_gb']:.1f} GB ({mem_status['ram_percent']:.0f}% utilisée)"
+
+        # Format CPU
+        cpu_info = f"{self.hardware_info['cpu_count']} cores"
+        if self.hardware_info.get('cpu_freq_max'):
+            cpu_info += f" @ {self.hardware_info['cpu_freq_max']:.0f} MHz"
+
+        # Température si disponible
+        temp_info = None
+        if thermal['available']:
+            temp = thermal['temperature']
+            status = thermal['status']
+            temp_info = f"{temp}°C ({status})"
+
+        # Construction du dictionnaire
+        report = {
+            'device': device,
+            'ram': ram_info,
+            'cpu': cpu_info,
+            'workers': params['parallel_workers'],
+            'cache_size': f"{params['cache_size_mb']} MB",
+            'timeout': f"{params['ollama_timeout']}s",
+            'max_steps': params['agent_max_steps']
+        }
+
+        # Ajouter température si disponible
+        if temp_info:
+            report['temperature'] = temp_info
+
+        return report
+
     def get_optimization_report(self) -> str:
         """
         Génère un rapport d'optimisation complet

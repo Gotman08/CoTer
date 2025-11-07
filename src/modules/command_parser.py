@@ -96,7 +96,7 @@ Si la demande n'est pas une action système, préfixe par [NO_COMMAND]."""
             command = response.replace('[DANGER]', '').strip()
             return {
                 'command': command,
-                'explanation': f"⚠️  Commande dangereuse détectée",
+                'explanation': "Commande dangereuse détectée",
                 'risk_level': 'high',
                 'original_request': original_request
             }

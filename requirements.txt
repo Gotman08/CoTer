@@ -9,3 +9,6 @@ psutil>=5.9.0
 
 # Menu interactif avec navigation par flèches (sélection modèle Ollama)
 simple-term-menu>=1.6.0
+
+# Affichage terminal riche et professionnel (Phase 2: UI/UX)
+rich>=13.7.0

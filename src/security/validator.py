@@ -131,13 +131,13 @@ class SecurityValidator:
             Message de confirmation
         """
         if risk_level == 'high':
-            emoji = "⚠️ "
+            emoji = "! "
             level_text = "DANGER"
         elif risk_level == 'medium':
-            emoji = "⚡"
+            emoji = "* "
             level_text = "ATTENTION"
         else:
-            emoji = "ℹ️"
+            emoji = "i "
             level_text = "INFO"
 
         message = f"""
@@ -213,11 +213,11 @@ Voulez-vous vraiment exécuter cette commande? (oui/non)"""
 
         # Trop de commandes à haut risque en peu de temps
         if self.high_risk_commands_count > 10:
-            alerts.append("⚠️  Nombre élevé de commandes à haut risque détecté")
+            alerts.append("! Nombre élevé de commandes à haut risque détecté")
 
         # Trop d'échecs
         if self.failed_commands_count > 20:
-            alerts.append("⚠️  Nombre élevé de commandes échouées détecté")
+            alerts.append("! Nombre élevé de commandes échouées détecté")
 
         # Analyser les dernières commandes pour détecter des séquences suspectes
         if len(self.command_history) >= 3:
@@ -225,12 +225,12 @@ Voulez-vous vraiment exécuter cette commande? (oui/non)"""
 
             # Séquence: recherche de fichiers sensibles puis suppression
             if any('find' in cmd for cmd in recent[:2]) and any('rm' in cmd for cmd in recent[2:]):
-                alerts.append("⚠️  Séquence suspecte détectée: recherche puis suppression")
+                alerts.append("! Séquence suspecte détectée: recherche puis suppression")
 
             # Multiples tentatives de sudo
             sudo_count = sum(1 for cmd in recent if 'sudo' in cmd)
             if sudo_count >= 2:
-                alerts.append("⚠️  Multiples commandes sudo détectées")
+                alerts.append("! Multiples commandes sudo détectées")
 
         return alerts
 

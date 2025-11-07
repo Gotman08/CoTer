@@ -4,6 +4,7 @@ import logging
 import sys
 from pathlib import Path
 from datetime import datetime
+from rich.logging import RichHandler
 
 def setup_logger(name: str = "TerminalIA", debug: bool = False, log_file: str = None) -> logging.Logger:
     """
@@ -24,19 +25,27 @@ def setup_logger(name: str = "TerminalIA", debug: bool = False, log_file: str = 
         return logger
 
     # Niveau de log
-    level = logging.DEBUG if debug else logging.INFO
-    logger.setLevel(level)
+    # Console: WARNING et + (sobre, masque INFO/DEBUG)
+    # Fichier: tout (DEBUG et +)
+    logger.setLevel(logging.DEBUG)  # Le logger accepte tout
 
-    # Format des messages
+    # Format des messages pour le fichier uniquement
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # Handler pour la console
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
+    # Handler Rich pour la console (sobre et professionnel)
+    console_level = logging.DEBUG if debug else logging.WARNING
+    console_handler = RichHandler(
+        level=console_level,
+        console=None,  # Utilise la console par défaut
+        show_time=False,  # Pas de timestamp (sobre)
+        show_path=False,  # Pas de chemin de fichier
+        markup=True,  # Support du markup Rich
+        rich_tracebacks=True,  # Tracebacks colorés en cas d'erreur
+        tracebacks_show_locals=debug  # Variables locales uniquement en debug
+    )
     logger.addHandler(console_handler)
 
     # Handler pour le fichier si spécifié

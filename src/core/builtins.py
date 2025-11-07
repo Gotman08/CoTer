@@ -9,6 +9,12 @@ from typing import Dict, Any, Callable, Optional
 from pathlib import Path
 import logging
 
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
+from rich import box
+
+from src.terminal.rich_console import get_console
 from src.utils.command_helpers import create_success_result, create_error_result
 
 logger = logging.getLogger(__name__)
@@ -161,79 +167,142 @@ class BuiltinCommands:
             self.terminal._show_history()
         elif args[0] == 'clear':
             self.terminal.history_manager.clear()
-            print("✅ Historique effacé")
+            console = get_console()
+            console.success("Historique effacé")
         elif args[0] == 'search' and len(args) > 1:
             query = ' '.join(args[1:])
             results = self.terminal.history_manager.search(query)
+            console = get_console()
+
             if results:
-                print(f"\n🔍 Résultats de recherche pour '{query}':")
-                print("─" * 60)
+                # Table de résultats
+                table = Table(
+                    title=f"Résultats de recherche pour '{query}'",
+                    show_header=True,
+                    box=box.SIMPLE,
+                    border_style="info"
+                )
+
+                table.add_column("#", style="dim", width=4, justify="right")
+                table.add_column("Commande", style="bright_white")
+
                 for i, entry in enumerate(results[:10], 1):
-                    print(f"{i}. {entry['command']}")
-                print("─" * 60)
+                    table.add_row(str(i), entry['command'])
+
+                console.print(table)
             else:
-                print(f"❌ Aucun résultat pour '{query}'")
+                console.print(f"[error]Aucun résultat pour '{query}'[/error]")
+
         elif args[0] == 'stats':
             stats = self.terminal.history_manager.get_statistics()
-            print("\n📊 Statistiques d'historique:")
-            print("─" * 60)
-            print(f"Total de commandes: {stats['total']}")
-            print(f"Taux de succès: {stats['success_rate']:.1f}%")
-            print(f"\nPar mode:")
+            console = get_console()
+
+            # Table des statistiques
+            stats_table = Table(
+                title="Statistiques d'Historique",
+                show_header=False,
+                box=box.SIMPLE,
+                border_style="cyan"
+            )
+
+            stats_table.add_column("Métrique", style="label")
+            stats_table.add_column("Valeur", style="bright_white", justify="right")
+
+            stats_table.add_row("Total de commandes", str(stats['total']))
+            stats_table.add_row("Taux de succès", f"{stats['success_rate']:.1f}%")
+            stats_table.add_section()
+
             for mode, count in stats['by_mode'].items():
-                print(f"  • {mode}: {count}")
-            print("─" * 60)
+                stats_table.add_row(f"Mode {mode}", str(count))
+
+            console.print(stats_table)
         else:
             print(f"Usage: history [clear|search <terme>|stats]")
 
         return create_success_result('')
 
     def cmd_help(self, args: list) -> Dict[str, Any]:
-        """Commande help - Afficher l'aide"""
-        help_text = """
-╔══════════════════════════════════════════════════════════════╗
-║           AIDE - COTER SHELL (Terminal IA Autonome)          ║
-╠══════════════════════════════════════════════════════════════╣
-║ MODES DU SHELL:                                              ║
-║   /manual     - Mode shell direct (exécution sans IA)        ║
-║   /auto       - Mode IA activé (langage naturel via Ollama)  ║
-║   /agent      - Mode projet autonome (multi-étapes)          ║
-║   /status     - Afficher le statut du shell                  ║
-╠══════════════════════════════════════════════════════════════╣
-║ COMMANDES BUILTINS:                                          ║
-║   cd <dir>    - Changer de répertoire                        ║
-║   pwd         - Afficher le répertoire courant               ║
-║   clear/cls   - Effacer l'écran                              ║
-║   history     - Afficher l'historique des commandes          ║
-║   env         - Afficher les variables d'environnement       ║
-║   export      - Exporter une variable d'environnement        ║
-║   echo        - Afficher un texte                            ║
-║   exit/quit   - Quitter le shell                             ║
-╠══════════════════════════════════════════════════════════════╣
-║ COMMANDES SLASH (/):                                         ║
-║   /help       - Afficher cette aide                          ║
-║   /quit       - Quitter le shell                             ║
-║   /clear      - Effacer l'historique IA                      ║
-║   /history    - Afficher l'historique détaillé               ║
-║   /models     - Changer de modèle Ollama                     ║
-║   /info       - Informations système                         ║
-║   /cache      - Statistiques du cache                        ║
-║   /hardware   - Informations hardware                        ║
-╚══════════════════════════════════════════════════════════════╝
+        """Commande help - Afficher l'aide avec Rich"""
+        console = get_console()
 
-EN MODE MANUAL:
-  Vous tapez directement des commandes shell (comme bash).
-  Exemples: ls -la, grep "test" file.txt, ps aux | grep python
+        # Table des modes
+        modes_table = Table(
+            title="Modes du Shell",
+            show_header=True,
+            box=box.SIMPLE,
+            border_style="cyan"
+        )
+        modes_table.add_column("Commande", style="mode.auto", no_wrap=True)
+        modes_table.add_column("Description", style="bright_white")
 
-EN MODE AUTO:
-  Vous tapez des demandes en langage naturel.
-  Exemples: "liste les fichiers", "montre les processus python"
+        modes_table.add_row("/manual", "Mode shell direct (sans IA)")
+        modes_table.add_row("/auto", "Mode IA (langage naturel)")
+        modes_table.add_row("/agent", "Mode projet autonome")
+        modes_table.add_row("/status", "Statut du shell")
 
-EN MODE AGENT:
-  Pour créer des projets complets de manière autonome.
-  Exemple: /agent crée-moi une API REST avec FastAPI
-"""
-        print(help_text)
+        # Table des builtins
+        builtins_table = Table(
+            title="Commandes Builtins",
+            show_header=True,
+            box=box.SIMPLE,
+            border_style="cyan"
+        )
+        builtins_table.add_column("Commande", style="command", no_wrap=True)
+        builtins_table.add_column("Description", style="bright_white")
+
+        builtins_table.add_row("cd <dir>", "Changer de répertoire")
+        builtins_table.add_row("pwd", "Afficher répertoire courant")
+        builtins_table.add_row("clear/cls", "Effacer l'écran")
+        builtins_table.add_row("history", "Historique des commandes")
+        builtins_table.add_row("env", "Variables d'environnement")
+        builtins_table.add_row("export", "Exporter variable")
+        builtins_table.add_row("echo", "Afficher texte")
+        builtins_table.add_row("exit/quit", "Quitter le shell")
+
+        # Table des commandes slash
+        slash_table = Table(
+            title="Commandes Slash",
+            show_header=True,
+            box=box.SIMPLE,
+            border_style="cyan"
+        )
+        slash_table.add_column("Commande", style="info", no_wrap=True)
+        slash_table.add_column("Description", style="bright_white")
+
+        slash_table.add_row("/help", "Afficher cette aide")
+        slash_table.add_row("/quit", "Quitter le shell")
+        slash_table.add_row("/clear", "Effacer historique IA")
+        slash_table.add_row("/history", "Historique détaillé")
+        slash_table.add_row("/models", "Changer modèle Ollama")
+        slash_table.add_row("/info", "Informations système")
+        slash_table.add_row("/cache", "Statistiques du cache")
+        slash_table.add_row("/hardware", "Informations hardware")
+
+        # Panel d'exemples
+        examples = Text()
+        examples.append("\nMODE MANUAL:\n", style="subtitle")
+        examples.append("  Commandes shell directes (comme bash)\n", style="dim")
+        examples.append("  Exemples: ls -la, grep 'test' file.txt\n\n", style="dim")
+
+        examples.append("MODE AUTO:\n", style="subtitle")
+        examples.append("  Demandes en langage naturel\n", style="dim")
+        examples.append("  Exemples: 'liste les fichiers', 'montre les processus'\n\n", style="dim")
+
+        examples.append("MODE AGENT:\n", style="subtitle")
+        examples.append("  Projets complets autonomes\n", style="dim")
+        examples.append("  Exemple: /agent crée-moi une API REST\n", style="dim")
+
+        # Afficher tout
+        console.print(Panel(
+            Text("AIDE - COTER SHELL", style="bold bright_white", justify="center"),
+            border_style="info",
+            box=box.HEAVY
+        ))
+        console.print(modes_table)
+        console.print(builtins_table)
+        console.print(slash_table)
+        console.print(Panel(examples, border_style="dim", box=box.ROUNDED))
+
         return create_success_result('')
 
     def cmd_env(self, args: list) -> Dict[str, Any]:

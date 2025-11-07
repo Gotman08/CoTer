@@ -6,18 +6,20 @@ from typing import Optional
 from src.modules import OllamaClient, CommandParser, CommandExecutor, AutonomousAgent
 from src.utils import (
     CommandLogger,
-    StatsDisplayer, InputValidator, UIFormatter
+    InputValidator
 )
 from src.security import SecurityValidator
 from src.core import ShellEngine, ShellMode, HistoryManager, BuiltinCommands
 from src.utils.command_helpers import CommandResultHandler, handle_command_errors
 from src.terminal.display_manager import DisplayManager
+from src.terminal.rich_console import get_console
+from src.terminal import rich_components
 from config import prompts, project_templates, constants
 
 class TerminalInterface:
     """Interface en ligne de commande pour le Terminal IA"""
 
-    def __init__(self, settings, logger, cache_manager=None):
+    def __init__(self, settings, logger, cache_manager=None, user_config=None):
         """
         Initialise l'interface terminal
 
@@ -25,11 +27,14 @@ class TerminalInterface:
             settings: Configuration de l'application
             logger: Logger principal
             cache_manager: Gestionnaire de cache optionnel (Phase 1)
+            user_config: Gestionnaire de configuration utilisateur
         """
         self.settings = settings
         self.logger = logger
         self.cache_manager = cache_manager
+        self.user_config = user_config
         self.running = False
+        self.console = get_console()  # Console Rich unifiée
 
         # Initialiser le moteur du shell hybride
         default_mode = ShellMode.MANUAL  # Mode par défaut: MANUAL
@@ -45,8 +50,6 @@ class TerminalInterface:
         self.logger.info(f"Commandes builtins chargées: {len(self.builtins.get_builtin_names())}")
 
         # Initialiser les utilitaires d'affichage (Refactoring)
-        self.ui = UIFormatter()
-        self.stats_displayer = StatsDisplayer(self.ui)
         self.input_validator = InputValidator()
 
         # Initialiser le gestionnaire de résultats unifié (Refactoring Phase 1.3)
@@ -64,6 +67,10 @@ class TerminalInterface:
                 logger=logger,
                 cache_manager=cache_manager
             )
+
+            # Préchauffer le modèle pour éviter le timeout sur la première requête
+            if settings.auto_warmup:
+                self._warmup_ollama_model()
 
             # Parser de commandes
             self.parser = CommandParser(self.ollama, logger)
@@ -98,9 +105,8 @@ class TerminalInterface:
                 'executor': self.executor,
                 'cache_manager': self.cache_manager,
                 'agent': self.agent,
-                'ui': self.ui,
-                'stats_displayer': self.stats_displayer,
-                'input_validator': self.input_validator
+                'input_validator': self.input_validator,
+                'user_config': self.user_config
             }
             self.display_manager = DisplayManager(components)
 
@@ -116,50 +122,74 @@ class TerminalInterface:
             self.logger.error(f"Erreur lors de l'initialisation: {e}", exc_info=True)
             raise
 
+    def _warmup_ollama_model(self):
+        """
+        Préchauffe le modèle Ollama pour éviter le timeout sur la première requête.
+
+        Le premier appel à Ollama charge le modèle en mémoire, ce qui peut prendre
+        90+ secondes. Cette méthode effectue une requête de warmup au démarrage
+        pour que les vraies requêtes soient instantanées.
+        """
+        try:
+            # Afficher un indicateur de chargement avec Rich
+            with self.console.create_status("Chargement du modèle Ollama...") as status:
+                # Requête minimale pour forcer le chargement du modèle
+                warmup_prompt = "test"
+                warmup_system = "Réponds seulement 'ok'"
+                self.ollama.generate(warmup_prompt, system_prompt=warmup_system)
+
+            self.logger.info("Modèle Ollama préchauffé avec succès")
+
+        except Exception as e:
+            # Ne pas bloquer le démarrage si le warmup échoue
+            self.logger.warning(f"Échec du préchauffage Ollama: {e}")
+            self.console.warning(f"Le préchauffage du modèle a échoué: {e}")
+
     def run(self):
         """Lance la boucle principale du terminal"""
         self.running = True
 
-        # Afficher le logo ASCII
-        print(prompts.ASCII_LOGO)
-        print(f"\nModèle: {self.settings.ollama_model} | Host: {self.settings.ollama_host}")
-
-        # Afficher le mode actuel
-        mode_symbol = self.shell_engine.get_prompt_symbol()
+        # Afficher le banner avec Rich
         mode_name = self.shell_engine.mode_name.upper()
-        print(f"{mode_symbol}  Mode: {mode_name} - {self.shell_engine.get_mode_description()}")
-
-        print("\nCommandes: /manual /auto /agent /help /quit")
-        print("Tapez /help pour l'aide complète\n")
+        self.console.print_banner(
+            model=self.settings.ollama_model,
+            host=self.settings.ollama_host,
+            mode=mode_name,
+            mode_description=self.shell_engine.get_mode_description()
+        )
 
         # Vérifier la connexion à Ollama
         if not self.ollama.check_connection():
-            print("⚠️  ATTENTION: Impossible de se connecter à Ollama!")
-            print(f"   Vérifiez que Ollama est lancé sur {self.settings.ollama_host}")
-            print("   Vous pouvez continuer mais les commandes ne seront pas parsées.\n")
+            warning_msg = f"Impossible de se connecter à Ollama!\n"
+            warning_msg += f"Vérifiez que Ollama est lancé sur {self.settings.ollama_host}\n\n"
+            warning_msg += "[dim]Vous pouvez continuer mais les commandes ne seront pas parsées.[/dim]"
+
+            self.console.print(rich_components.create_warning_panel(warning_msg))
 
         # Boucle principale
         try:
             while self.running:
                 self._process_input()
         except KeyboardInterrupt:
-            print("\n\nInterruption détectée...")
+            self.console.print("\n")
+            self.console.info("Interruption détectée...")
             self._quit()
         except Exception as e:
             self.logger.error(f"Erreur dans la boucle principale: {e}", exc_info=True)
-            print(f"\n❌ Erreur fatale: {e}")
+            self.console.print()
+            self.console.error(f"Erreur fatale: {e}")
             self._quit()
 
     def _process_input(self):
         """Traite une entrée utilisateur"""
         try:
-            # Afficher le prompt avec le symbole du mode actuel et le répertoire courant
+            # Afficher le prompt avec Rich
             current_dir = self.executor.get_current_directory()
-            mode_symbol = self.shell_engine.get_prompt_symbol()
-            prompt_text = f"\n{mode_symbol} [{current_dir}]\n> "
+            mode_name = self.shell_engine.mode_name.upper()
+            prompt_text = self.console.get_prompt_text(current_dir, mode_name)
 
             # Lire l'entrée utilisateur
-            user_input = input(prompt_text).strip()
+            user_input = self.console.input(prompt_text).strip()
 
             if not user_input:
                 return
@@ -171,10 +201,10 @@ class TerminalInterface:
                 self._handle_user_request(user_input)
 
         except EOFError:
-            print("\n")
+            self.console.print("\n")
             self._quit()
         except KeyboardInterrupt:
-            print("\n")
+            self.console.print("\n")
             raise
 
     def _handle_special_command(self, command: str):
@@ -190,23 +220,27 @@ class TerminalInterface:
             self._quit()
 
         elif cmd_lower == '/help':
-            print(prompts.HELP_TEXT)
+            self.console.print_help(prompts.HELP_TEXT)
 
         elif cmd_lower == '/manual':
             # Basculer en mode MANUAL
             if self.shell_engine.switch_to_manual():
-                print(f"\n⌨️  Mode MANUAL activé")
-                print(f"   {self.shell_engine.get_mode_description()}")
+                self.console.print()
+                self.console.success("Mode MANUAL activé")
+                self.console.print(f"[dim]{self.shell_engine.get_mode_description()}[/dim]")
             else:
-                print(f"\n⌨️  Déjà en mode MANUAL")
+                self.console.print()
+                self.console.info("Déjà en mode MANUAL")
 
         elif cmd_lower == '/auto':
             # Basculer en mode AUTO
             if self.shell_engine.switch_to_auto():
-                print(f"\n🤖 Mode AUTO activé")
-                print(f"   {self.shell_engine.get_mode_description()}")
+                self.console.print()
+                self.console.success("Mode AUTO activé")
+                self.console.print(f"[dim]{self.shell_engine.get_mode_description()}[/dim]")
             else:
-                print(f"\n🤖 Déjà en mode AUTO")
+                self.console.print()
+                self.console.info("Déjà en mode AUTO")
 
         elif cmd_lower == '/status':
             # Afficher le statut du shell
@@ -215,12 +249,13 @@ class TerminalInterface:
         elif cmd_lower == '/clear':
             self.parser.clear_history()
             self.ollama.clear_history()
-            print("✅ Historique effacé")
+            self.console.print()
+            self.console.success("Historique effacé")
 
         elif cmd_lower == '/history':
             self.display_manager.show_history()
 
-        elif cmd_lower == '/models':
+        elif cmd_lower == '/models' or cmd_lower == '/change':
             self.display_manager.list_models()
 
         elif cmd_lower == '/info':
@@ -240,31 +275,39 @@ class TerminalInterface:
                 if request:
                     self._handle_autonomous_mode(request)
                 else:
-                    print("Usage: /agent <votre demande>")
-                    print("Exemple: /agent crée-moi une API FastAPI")
+                    self.console.print()
+                    self.console.info("Usage: /agent <votre demande>")
+                    self.console.print("[dim]Exemple: /agent crée-moi une API FastAPI[/dim]")
             else:
-                print("❌ Mode agent autonome désactivé")
+                self.console.print()
+                self.console.error("Mode agent autonome désactivé")
 
         elif cmd_lower == '/pause':
             if self.agent and self.agent.is_running:
                 self.agent.pause()
-                print(prompts.AGENT_PAUSED)
+                self.console.print()
+                self.console.print(prompts.AGENT_PAUSED)
             else:
-                print("❌ Aucun agent en cours d'exécution")
+                self.console.print()
+                self.console.error("Aucun agent en cours d'exécution")
 
         elif cmd_lower == '/resume':
             if self.agent and self.agent.is_paused:
                 self.agent.resume()
-                print("▶️  Agent repris")
+                self.console.print()
+                self.console.success("Agent repris")
             else:
-                print("❌ Aucun agent en pause")
+                self.console.print()
+                self.console.error("Aucun agent en pause")
 
         elif cmd_lower == '/stop':
             if self.agent and self.agent.is_running:
                 self.agent.stop()
-                print(prompts.AGENT_STOPPED)
+                self.console.print()
+                self.console.print(prompts.AGENT_STOPPED)
             else:
-                print("❌ Aucun agent en cours d'exécution")
+                self.console.print()
+                self.console.error("Aucun agent en cours d'exécution")
 
         elif cmd_lower.startswith('/cache'):
             # Commandes de gestion du cache (Phase 1)
@@ -277,8 +320,9 @@ class TerminalInterface:
             elif parts[1].lower() == 'clear':
                 self.display_manager.clear_cache()
             else:
-                print("❌ Commande cache inconnue")
-                print("Usage: /cache [stats|clear]")
+                self.console.print()
+                self.console.error("Commande cache inconnue")
+                self.console.print("[dim]Usage: /cache [stats|clear][/dim]")
 
         elif cmd_lower == '/hardware':
             self.display_manager.show_hardware_info()
@@ -286,7 +330,8 @@ class TerminalInterface:
         elif cmd_lower.startswith('/rollback'):
             # Commandes de rollback (Phase 2)
             if not self.agent:
-                print("❌ Le mode agent n'est pas activé")
+                self.console.print()
+                self.console.error("Le mode agent n'est pas activé")
                 return
 
             parts = command.split()
@@ -302,8 +347,9 @@ class TerminalInterface:
             elif parts[1].lower() == 'stats':
                 self.display_manager.show_rollback_stats()
             else:
-                print("❌ Commande rollback inconnue")
-                print("Usage: /rollback [list|restore|stats]")
+                self.console.print()
+                self.console.error("Commande rollback inconnue")
+                self.console.print("[dim]Usage: /rollback [list|restore|stats][/dim]")
 
         elif cmd_lower == '/security':
             # Commande de rapport de sécurité (Phase 2)
@@ -312,7 +358,8 @@ class TerminalInterface:
         elif cmd_lower.startswith('/corrections'):
             # Commandes d'auto-correction (Phase 3)
             if not self.agent:
-                print("❌ Le mode agent n'est pas activé")
+                self.console.print()
+                self.console.error("Le mode agent n'est pas activé")
                 return
 
             parts = command.split()
@@ -321,12 +368,14 @@ class TerminalInterface:
             elif parts[1].lower() == 'last':
                 self.display_manager.show_last_error()
             else:
-                print("❌ Commande corrections inconnue")
-                print("Usage: /corrections [stats|last]")
+                self.console.print()
+                self.console.error("Commande corrections inconnue")
+                self.console.print("[dim]Usage: /corrections [stats|last][/dim]")
 
         else:
-            print(f"❌ Commande inconnue: {command}")
-            print("   Tapez /help pour voir les commandes disponibles")
+            self.console.print()
+            self.console.error(f"Commande inconnue: {command}")
+            self.console.print("[dim]Tapez /help pour voir les commandes disponibles[/dim]")
 
     def _handle_user_request(self, user_input: str):
         """
@@ -346,19 +395,21 @@ class TerminalInterface:
 
             # MODE AUTO : Parsing IA puis exécution
             elif self.shell_engine.is_auto_mode():
-                print(f"\n🔄 Analyse de votre demande...")
+                self.console.print()
                 self._handle_auto_mode(user_input)
                 return
 
             # MODE AGENT : Toujours proposer le mode autonome
             elif self.shell_engine.is_agent_mode():
-                print(f"\n🏗️  Mode AGENT : Analyse en cours...")
+                self.console.print()
+                self.console.info("Mode AGENT : Analyse en cours...")
                 self._handle_autonomous_mode(user_input)
                 return
 
         except Exception as e:
             self.logger.error(f"Erreur lors du traitement: {e}", exc_info=True)
-            print(f"\n❌ Erreur: {e}")
+            self.console.print()
+            self.console.error(f"Erreur: {e}")
 
     def _handle_manual_mode(self, user_input: str):
         """
@@ -383,19 +434,33 @@ class TerminalInterface:
 
             # Exécuter via subprocess (pas builtin)
             # strict_mode=False pour autoriser pipes, redirections, etc.
-            result = self.executor.execute(user_input, strict_mode=False)
+
+            # Callback pour afficher la sortie en temps réel
+            def stream_output(line):
+                """Affiche chaque ligne de sortie en temps réel"""
+                self.console.print(f"[output]{line}[/output]")
+
+            # Exécution avec streaming
+            self.console.print()  # Ligne vide avant la sortie
+            result = self.executor.execute_streaming(
+                user_input,
+                output_callback=stream_output,
+                strict_mode=False
+            )
 
             # Traiter le résultat via le handler unifié (display + history + logging)
+            # skip_output=True car déjà affiché en temps réel
             self.result_handler.handle_result(
                 result=result,
                 command=user_input,
                 user_input=user_input,
-                mode="manual"
+                mode="manual",
+                skip_output=True
             )
 
         except Exception as e:
             self.logger.error(f"Erreur mode manuel: {e}", exc_info=True)
-            print(f"\n❌ Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
 
     def _handle_auto_mode(self, user_input: str):
         """
@@ -407,57 +472,81 @@ class TerminalInterface:
         try:
             # Si l'agent est activé, vérifier si c'est une demande complexe
             if self.agent and self.settings.agent_enabled:
-                analysis = self.agent.planner.analyze_request(user_input)
+                # Analyse de la complexité avec spinner
+                with self.console.create_status("Analyse de la complexité...") as status:
+                    analysis = self.agent.planner.analyze_request(user_input)
 
                 if analysis.get('is_complex'):
                     # Demande complexe détectée, utiliser le mode agent
-                    print(f"\n📦 Projet complexe détecté: {analysis.get('project_type')}")
-                    print("🤖 Activation du mode agent autonome...")
+                    self.console.print()
+                    self.console.info(f"Projet complexe détecté: {analysis.get('project_type')}")
+                    self.console.info("Activation du mode agent autonome disponible")
 
                     # Demander si l'utilisateur veut utiliser le mode autonome
+                    # PAS de spinner ici pour ne pas bloquer l'input()
                     response = input("\nUtiliser le mode agent autonome? (oui/non): ").strip().lower()
                     if response in ['oui', 'o', 'yes', 'y']:
                         self.shell_engine.switch_to_agent()
                         self._handle_autonomous_mode(user_input)
                         return
                     else:
-                        print("Mode agent annulé, traitement en mode commande simple.")
+                        self.console.warning("Mode agent annulé, traitement en mode commande simple")
 
-            # Parser la demande en mode normal
-            parsed = self.parser.parse_user_request(user_input)
+            # Parser la demande en mode normal avec spinner
+            with self.console.create_status("Génération de la commande...") as status:
+                parsed = self.parser.parse_user_request(user_input)
 
             command = parsed.get('command')
             risk_level = parsed.get('risk_level', 'unknown')
             explanation = parsed.get('explanation', '')
 
             if not command:
-                print(f"\n💬 {explanation}")
+                self.console.print(explanation)
                 return
 
             # Afficher la commande générée
-            print(f"\n📝 Commande générée: {command}")
+            self.console.info(f"Commande générée: {command}")
 
             # Valider la sécurité
             is_valid, security_level, security_reason = self.security.validate_command(command)
 
             if not is_valid:
-                print(f"\n🚫 Commande bloquée!")
-                print(f"   Raison: {security_reason}")
+                self.console.print()
+                self.console.error("Commande bloquée")
+                self.console.print(f"   Raison: {security_reason}")
                 self.logger.warning(f"Commande bloquée: {command} - {security_reason}")
                 return
 
             # Demander confirmation si nécessaire
             if security_level == 'high' or risk_level == 'high':
                 if not self._confirm_command(command, security_level, security_reason):
-                    print("❌ Commande annulée")
+                    self.console.error("Commande annulée")
                     return
 
-            # Exécuter la commande
-            print(f"\n⚙️  Exécution...")
-            result = self.executor.execute(command)
+            # Exécuter la commande avec streaming
+            self.console.info("Exécution...")
+            self.console.print()  # Ligne vide avant la sortie
+
+            # Callback pour afficher la sortie en temps réel
+            def stream_output(line):
+                """Affiche chaque ligne de sortie en temps réel"""
+                self.console.print(f"[output]{line}[/output]")
+
+            result = self.executor.execute_streaming(
+                command,
+                output_callback=stream_output,
+                strict_mode=False
+            )
 
             # Traiter le résultat (affichage + historique + logging)
-            self.result_handler.handle_result(result, command, user_input, "auto")
+            # skip_output=True car déjà affiché en temps réel
+            self.result_handler.handle_result(
+                result,
+                command,
+                user_input,
+                "auto",
+                skip_output=True
+            )
 
             # Phase 2: Enregistrer dans l'historique de sécurité
             self.security.record_command_execution(
@@ -471,7 +560,7 @@ class TerminalInterface:
 
         except Exception as e:
             self.logger.error(f"Erreur mode auto: {e}", exc_info=True)
-            print(f"\n❌ Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
 
     def _confirm_command(self, command: str, risk_level: str, reason: str) -> bool:
         """
@@ -505,7 +594,7 @@ class TerminalInterface:
             user_request: Demande utilisateur
         """
         if not self.agent:
-            print("❌ Mode agent non disponible")
+            self.console.error("Mode agent non disponible")
             return
 
         try:
@@ -517,24 +606,25 @@ class TerminalInterface:
 
             if not result.get('success'):
                 if result.get('reason') == 'not_complex':
-                    print("\n💡 Cette demande ne nécessite pas le mode autonome.")
-                    print("   Elle sera traitée en mode commande simple.")
+                    self.console.info("Cette demande ne nécessite pas le mode autonome.")
+                    self.console.print("   Elle sera traitée en mode commande simple.")
                     # Retourner au mode normal
                     return
                 else:
-                    print(f"\n❌ Erreur: {result.get('message', 'Erreur inconnue')}")
+                    self.console.error(result.get('message', 'Erreur inconnue'))
                     return
 
             # Afficher le plan
             plan = result.get('plan')
             if not plan:
-                print("❌ Impossible de générer un plan")
+                self.console.error("Impossible de générer un plan")
                 return
 
             print("\n" + self.agent.planner.display_plan(plan))
 
             # Demander confirmation
-            print("\n" + "═" * 60)
+            from rich.rule import Rule
+            self.console.print(Rule(style="dim"))
             response = input("\nVoulez-vous lancer l'exécution? (oui/non/modifier): ").strip().lower()
 
             if response in ['oui', 'o', 'yes', 'y']:
@@ -558,19 +648,19 @@ class TerminalInterface:
                     print(f"Erreur: {exec_result.get('error', 'Erreur inconnue')}")
 
             elif response in ['modifier', 'm', 'mod']:
-                print("\n💡 Fonctionnalité de modification du plan à venir...")
-                print("   Pour l'instant, relancez avec une demande modifiée.")
+                self.console.info("Fonctionnalité de modification du plan à venir...")
+                self.console.print("   Pour l'instant, relancez avec une demande modifiée.")
             else:
-                print("\n❌ Exécution annulée")
+                self.console.error("Exécution annulée")
 
         except KeyboardInterrupt:
-            print("\n\n⚠️  Interruption détectée")
+            self.console.warning("Interruption détectée")
             if self.agent and self.agent.is_running:
                 self.agent.stop()
                 print(prompts.AGENT_STOPPED)
         except Exception as e:
             self.logger.error(f"Erreur mode autonome: {e}", exc_info=True)
-            print(f"\n❌ Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
 
     def _quit(self):
         """Quitte l'application"""

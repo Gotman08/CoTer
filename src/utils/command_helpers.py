@@ -7,6 +7,9 @@ from typing import Dict, Any, Callable, Optional
 from functools import wraps
 import logging
 
+from src.terminal.rich_console import get_console
+from src.terminal.rich_components import create_result_panel, create_error_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,14 +88,9 @@ def handle_command_errors(error_prefix: str = "Erreur"):
                 if hasattr(self, 'logger') and self.logger:
                     self.logger.error(f"{error_prefix}: {e}", exc_info=True)
 
-                # Afficher à l'utilisateur
-                error_message = f"\n❌ Erreur: {e}"
-                if hasattr(self, 'ui') and hasattr(self.ui, 'print_error'):
-                    # Utiliser UIFormatter si disponible
-                    self.ui.print_error(str(e))
-                else:
-                    # Fallback sur print standard
-                    print(error_message)
+                # Afficher à l'utilisateur avec Rich Console
+                console = get_console()
+                console.error(f"{error_prefix}: {e}")
 
                 # Retourner None pour signaler l'échec
                 return None
@@ -126,7 +124,8 @@ class CommandResultHandler:
         result: Dict[str, Any],
         command: str,
         user_input: str,
-        mode: str
+        mode: str,
+        skip_output: bool = False
     ) -> None:
         """
         Traite complètement un résultat de commande :
@@ -139,9 +138,10 @@ class CommandResultHandler:
             command: La commande exécutée
             user_input: L'input original de l'utilisateur
             mode: Le mode shell (manual/auto/agent)
+            skip_output: Si True, ne pas afficher l'output (déjà streamé en temps réel)
         """
         # 1. Afficher le résultat
-        self._display_result(result)
+        self._display_result(result, skip_output=skip_output)
 
         # 2. Ajouter à l'historique persistant
         if hasattr(self.terminal, 'history_manager'):
@@ -161,33 +161,34 @@ class CommandResultHandler:
                 error=result.get('error', '')
             )
 
-    def _display_result(self, result: Dict[str, Any]) -> None:
+    def _display_result(self, result: Dict[str, Any], skip_output: bool = False) -> None:
         """
         Affiche le résultat d'une commande à l'utilisateur
 
         Args:
             result: Résultat à afficher
+            skip_output: Si True, ne pas afficher l'output (déjà streamé en temps réel)
         """
         # Utiliser la méthode existante de terminal_interface si disponible
         if hasattr(self.terminal, '_display_result'):
             self.terminal._display_result(result)
             return
 
-        # Sinon, affichage de base
+        # Sinon, affichage avec Rich Console
+        console = get_console()
+
         if result['success']:
-            print(f"\n✅ Commande exécutée avec succès")
-            if result.get('output'):
-                print(f"\n📤 Sortie:")
-                print("─" * 60)
-                print(result['output'])
-                print("─" * 60)
+            console.success("Commande exécutée avec succès")
+            # N'afficher l'output QUE si pas déjà streamé
+            if not skip_output and result.get('output'):
+                panel = create_result_panel(result['output'], title="Sortie", success=True)
+                console.print(panel)
         else:
-            print(f"\n❌ Erreur lors de l'exécution")
-            if result.get('error'):
-                print(f"\n⚠️  Message d'erreur:")
-                print("─" * 60)
-                print(result['error'])
-                print("─" * 60)
+            console.error("Échec de l'exécution")
+            # N'afficher l'erreur QUE si pas déjà streamée
+            if not skip_output and result.get('error'):
+                panel = create_error_panel(result['error'], title="Erreur")
+                console.print(panel)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -313,9 +314,11 @@ def confirm_action(message: str, default: bool = False) -> bool:
             elif response in ['non', 'n', 'no']:
                 return False
             else:
-                print("Réponse invalide. Tapez 'oui' ou 'non' (ou o/n)")
+                console = get_console()
+                console.warning("Réponse invalide. Tapez 'oui' ou 'non' (ou o/n)")
         except (EOFError, KeyboardInterrupt):
-            print()  # Nouvelle ligne
+            console = get_console()
+            console.print()  # Nouvelle ligne
             return False
 
 

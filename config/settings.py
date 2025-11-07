@@ -16,6 +16,7 @@ class Settings:
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.ollama_model = os.getenv("OLLAMA_MODEL", "llama2")
         self.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+        self.auto_warmup = os.getenv("AUTO_WARMUP", "true").lower() == "true"  # Préchauffer le modèle au démarrage
 
         # Configuration du terminal
         self.prompt_symbol = "🤖 IA>"

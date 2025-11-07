@@ -10,6 +10,7 @@ from .rollback_manager import RollbackManager
 from .auto_corrector import AutoCorrector
 from .ui_helpers import UIFormatter, StatsDisplayer, InputValidator
 from .ollama_manager import OllamaManager
+from .user_config import UserConfigManager
 from . import parallel_workers
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     'StatsDisplayer',
     'InputValidator',
     'OllamaManager',
+    'UserConfigManager',
     'parallel_workers'
 ]

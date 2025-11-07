@@ -3,17 +3,33 @@ Display Manager - Gestion de l'affichage et des statistiques du terminal
 
 Ce module contient toutes les méthodes d'affichage et de statistiques,
 ainsi que les callbacks pour le mode agent.
+
+Refactorisé pour utiliser Rich Console et composants Rich réutilisables.
 """
 
 import requests
-from typing import Optional
+from typing import Optional, Dict, Any, List
 from simple_term_menu import TerminalMenu
-from src.utils import UIFormatter, StatsDisplayer, InputValidator, HardwareOptimizer
+
+from src.terminal.rich_console import get_console
+from src.terminal.rich_components import (
+    create_result_panel,
+    create_error_panel,
+    create_warning_panel,
+    create_models_table,
+    create_history_table,
+    create_hardware_table,
+    create_cache_stats_table,
+    create_stats_table,
+    create_agent_plan_table,
+    create_status_text
+)
+from src.utils import InputValidator, HardwareOptimizer
 from config import prompts, project_templates, constants
 
 
 class DisplayManager:
-    """Gère l'affichage et les statistiques du terminal"""
+    """Gère l'affichage et les statistiques du terminal avec Rich"""
 
     def __init__(self, components: dict):
         """
@@ -30,8 +46,6 @@ class DisplayManager:
                 - executor: Exécuteur de commandes
                 - cache_manager: Gestionnaire de cache (optionnel)
                 - agent: Agent autonome (optionnel)
-                - ui: UIFormatter
-                - stats_displayer: StatsDisplayer
                 - input_validator: InputValidator
         """
         self.components = components
@@ -44,60 +58,54 @@ class DisplayManager:
         self.executor = components['executor']
         self.cache_manager = components.get('cache_manager')
         self.agent = components.get('agent')
-        self.ui = components['ui']
-        self.stats_displayer = components['stats_displayer']
-        self.input_validator = components['input_validator']
+        self.input_validator = components.get('input_validator')
+        self.user_config = components.get('user_config')
+
+        # Console Rich unifiée
+        self.console = get_console()
+
+    # ═══════════════════════════════════════════════════════════════
+    # AFFICHAGE DE RÉSULTATS
+    # ═══════════════════════════════════════════════════════════════
 
     def display_result(self, result: dict):
         """
-        Affiche le résultat d'une commande
+        Affiche le résultat d'une commande avec Rich
 
         Args:
             result: Résultat de l'exécution
         """
         if result['success']:
-            print(f"\n✅ Commande exécutée avec succès")
+            self.console.success("Commande exécutée avec succès")
+
             if result.get('output'):
-                print(f"\n📤 Sortie:")
-                print("─" * 60)
                 output = self.security.sanitize_output(result['output'])
-                print(output)
-                print("─" * 60)
+                panel = create_result_panel(output, title="Sortie", success=True)
+                self.console.print(panel)
         else:
-            print(f"\n❌ Erreur lors de l'exécution")
+            self.console.error("Échec de l'exécution de la commande")
+
             if result.get('error'):
-                print(f"\n⚠️  Message d'erreur:")
-                print("─" * 60)
-                print(result['error'])
-                print("─" * 60)
+                panel = create_error_panel(result['error'], title="Erreur")
+                self.console.print(panel)
+
+    # ═══════════════════════════════════════════════════════════════
+    # HISTORIQUE DES COMMANDES
+    # ═══════════════════════════════════════════════════════════════
 
     def show_history(self):
-        """Affiche l'historique des commandes"""
-        history = self.history_manager.get_recent(20)  # Dernières 20 commandes
+        """Affiche l'historique des commandes dans une table Rich"""
+        history = self.history_manager.get_recent(20)
 
         if not history:
-            print("\n📝 Aucune commande dans l'historique")
+            self.console.warning("Aucune commande dans l'historique")
             return
 
-        print("\n📝 Historique des commandes:")
-        print("═" * 80)
-
-        for i, entry in enumerate(history, 1):
-            # Icônes selon le mode
-            mode_icons = {
-                'manual': '⌨️',
-                'auto': '🤖',
-                'agent': '🏗️'
-            }
-            icon = mode_icons.get(entry.get('mode', 'manual'), '❓')
-
-            # Indicateur de succès
-            status = '✅' if entry.get('success', True) else '❌'
-
-            # Timestamp (simplifié)
+        # Préparer les données avec les timestamps
+        history_data = []
+        for entry in history:
             timestamp = entry.get('timestamp', '')
             if timestamp:
-                # Garder seulement HH:MM:SS
                 try:
                     from datetime import datetime
                     dt = datetime.fromisoformat(timestamp)
@@ -107,68 +115,79 @@ class DisplayManager:
             else:
                 time_str = '??:??:??'
 
-            print(f"\n{i:2}. {icon} [{time_str}] {status} {entry['command']}")
+            history_data.append({
+                'command': entry['command'],
+                'success': entry.get('success', True),
+                'timestamp': time_str
+            })
 
-        print("\n═" * 80)
-        print(f"Total: {len(self.history_manager)} commandes | Affichées: {len(history)}")
+        # Créer et afficher la table
+        table = create_history_table(history_data, limit=20, show_timestamps=True)
+        self.console.print(table)
 
-        # Afficher les statistiques
+        # Statistiques
         stats = self.history_manager.get_statistics()
-        print(f"Taux de succès: {stats['success_rate']:.1f}%")
-        print("\nUtilisez '/history search <terme>' pour rechercher")
+        self.console.print(
+            f"\n[label]Total:[/label] {len(self.history_manager)} commandes | "
+            f"[label]Taux de succès:[/label] [success]{stats['success_rate']:.1f}%[/success]"
+        )
+        self.console.print("\n[dim]Utilisez '/history search <terme>' pour rechercher[/dim]")
+
+    # ═══════════════════════════════════════════════════════════════
+    # MODÈLES OLLAMA
+    # ═══════════════════════════════════════════════════════════════
 
     def list_models(self):
         """Liste les modèles Ollama disponibles et permet de changer de modèle"""
-        print("\n🔍 Récupération des modèles disponibles...")
-
-        # Récupérer les informations détaillées des modèles
-        try:
-            response = requests.get(f"{self.settings.ollama_host}/api/tags", timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            models_info = data.get('models', [])
-        except Exception as e:
-            print(f"❌ Erreur lors de la récupération des modèles: {e}")
-            return
+        with self.console.create_status("Récupération des modèles disponibles..."):
+            try:
+                response = requests.get(f"{self.settings.ollama_host}/api/tags", timeout=5)
+                response.raise_for_status()
+                data = response.json()
+                models_info = data.get('models', [])
+            except Exception as e:
+                self.console.error(f"Erreur lors de la récupération des modèles: {e}")
+                return
 
         if not models_info:
-            print("❌ Aucun modèle trouvé")
+            self.console.error("Aucun modèle trouvé")
             return
 
-        # Afficher les modèles avec leurs informations
-        print("\n📦 Modèles Ollama disponibles:")
-        print("─" * 60)
+        # Préparer les données pour la table
+        models_data = []
         for model_info in models_info:
-            name = model_info['name']
-            size_bytes = model_info.get('size', 0)
+            models_data.append({
+                'name': model_info['name'],
+                'size': self._format_model_size(model_info.get('size', 0))
+            })
 
-            # Formater la taille
-            size = self._format_model_size(size_bytes)
-
-            # Marquer le modèle actuel
-            marker = " ✓" if name == self.settings.ollama_model else ""
-            print(f"  • {name:<30} ({size}){marker}")
-        print("─" * 60)
+        # Afficher la table
+        table = create_models_table(models_data, current_model=self.settings.ollama_model)
+        self.console.print(table)
 
         # Si un seul modèle, pas besoin de menu
         if len(models_info) == 1:
             return
 
         # Proposer de changer de modèle
-        print("\n💡 Voulez-vous changer de modèle?")
+        self.console.print("\n[info]Voulez-vous changer de modèle?[/info]")
         response = input("   Tapez 'o' pour oui, ou Entrée pour continuer: ").strip().lower()
 
         if response not in ['o', 'oui', 'y', 'yes']:
             return
 
         # Créer le menu interactif
+        self._show_model_selection_menu(models_info)
+
+    def _show_model_selection_menu(self, models_info: List[Dict[str, Any]]):
+        """Affiche le menu de sélection de modèle"""
         model_names = [m['name'] for m in models_info]
         menu_options = []
 
         for model_info in models_info:
             name = model_info['name']
             size = self._format_model_size(model_info.get('size', 0))
-            marker = " ✓" if name == self.settings.ollama_model else ""
+            marker = " [success]✓[/success]" if name == self.settings.ollama_model else ""
             menu_options.append(f"{name} ({size}){marker}")
 
         try:
@@ -184,13 +203,13 @@ class DisplayManager:
             menu_index = terminal_menu.show()
 
             if menu_index is None:
-                print("\n⚠️  Sélection annulée")
+                self.console.warning("Sélection annulée")
                 return
 
             selected_model = model_names[menu_index]
 
             if selected_model == self.settings.ollama_model:
-                print(f"\n✓ Modèle inchangé: {selected_model}")
+                self.console.info(f"Modèle inchangé: {selected_model}")
                 return
 
             # Changer le modèle
@@ -198,13 +217,17 @@ class DisplayManager:
             self.settings.ollama_model = selected_model
             self.ollama.model = selected_model
 
-            print(f"\n✓ Modèle changé: {old_model} → {selected_model}")
+            # Sauvegarder le modèle dans la configuration utilisateur
+            if self.user_config:
+                self.user_config.save_last_model(selected_model)
+
+            self.console.success(f"Modèle changé: {old_model} → {selected_model}")
 
             if self.logger:
                 self.logger.info(f"Changement de modèle: {old_model} → {selected_model}")
 
         except Exception as e:
-            print(f"\n❌ Erreur lors de la sélection: {e}")
+            self.console.error(f"Erreur lors de la sélection: {e}")
 
     def _format_model_size(self, size_bytes: int) -> str:
         """
@@ -222,106 +245,139 @@ class DisplayManager:
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} PB"
 
-    def show_system_info(self):
-        """Affiche les informations système"""
-        print("\n💻 Informations système:")
-        print("═" * 70)
+    # ═══════════════════════════════════════════════════════════════
+    # INFORMATIONS SYSTÈME
+    # ═══════════════════════════════════════════════════════════════
 
+    def show_system_info(self):
+        """Affiche les informations système dans une table"""
         info = self.executor.get_system_info()
 
-        labels = {
-            'hostname': 'Nom d\'hôte',
-            'username': 'Utilisateur',
-            'os': 'Système',
-            'uptime': 'Uptime',
-            'current_dir': 'Répertoire courant'
+        # Préparer les données pour la table
+        stats_data = {
+            "Nom d'hôte": info.get('hostname', 'N/A'),
+            "Utilisateur": info.get('username', 'N/A'),
+            "Système": info.get('os', 'N/A'),
+            "Uptime": info.get('uptime', 'N/A'),
+            "Répertoire courant": info.get('current_dir', 'N/A')
         }
 
-        for key, value in info.items():
-            label = labels.get(key, key)
-            print(f"{label:20}: {value}")
+        table = create_stats_table(stats_data, title="Informations Système")
+        self.console.print(table)
 
-        print("═" * 70)
+    def show_hardware_info(self):
+        """Affiche les informations hardware et optimisations"""
+        try:
+            optimizer = HardwareOptimizer(self.logger)
+            report = optimizer.get_optimization_report_dict()
+
+            # Utiliser le composant hardware_table
+            table = create_hardware_table(report)
+            self.console.print(table)
+
+        except Exception as e:
+            self.console.error(f"Erreur lors de la récupération des infos hardware: {e}")
+            self.logger.error(f"Erreur hardware info: {e}")
+
+    # ═══════════════════════════════════════════════════════════════
+    # TEMPLATES DE PROJETS
+    # ═══════════════════════════════════════════════════════════════
 
     def list_templates(self):
         """Liste les templates de projets disponibles"""
         templates = project_templates.list_templates()
 
-        print("\n📚 Templates de projets disponibles:")
-        print("═" * 70)
-
+        # Créer une table pour les templates
+        stats_data = {}
         for name, description in templates.items():
-            print(f"\n  • {name}")
-            print(f"    {description}")
+            stats_data[name] = description
 
-        print("\n═" * 70)
-        print("\nUtilisez ces templates en demandant: 'crée un projet [type]'")
-        print("Ou utilisez /agent pour des projets personnalisés")
+        table = create_stats_table(stats_data, title="Templates de Projets Disponibles")
+        self.console.print(table)
+
+        self.console.print("\n[dim]Utilisez ces templates en demandant: 'crée un projet [type]'[/dim]")
+        self.console.print("[dim]Ou utilisez /agent pour des projets personnalisés[/dim]")
+
+    # ═══════════════════════════════════════════════════════════════
+    # CACHE OLLAMA
+    # ═══════════════════════════════════════════════════════════════
 
     def show_cache_stats(self):
         """Affiche les statistiques du cache Ollama"""
         if not self.cache_manager:
-            self.ui.print_warning("Le cache n'est pas activé")
-            print("   Activez-le dans .env avec CACHE_ENABLED=true")
+            panel = create_warning_panel(
+                "Le cache n'est pas activé\n"
+                "Activez-le dans .env avec CACHE_ENABLED=true"
+            )
+            self.console.print(panel)
             return
 
         try:
             stats = self.ollama.get_cache_stats()
-            self.stats_displayer.display_cache_stats(stats)
+            table = create_cache_stats_table(stats)
+            self.console.print(table)
+
         except Exception as e:
-            self.ui.print_error(f"Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
             self.logger.error(f"Erreur affichage stats cache: {e}")
 
     def clear_cache(self):
         """Efface le cache Ollama"""
         if not self.cache_manager:
-            self.ui.print_warning("Le cache n'est pas activé")
+            panel = create_warning_panel("Le cache n'est pas activé")
+            self.console.print(panel)
             return
 
         if not self.input_validator.confirm_action(
-            "⚠️  Attention: Cette action va effacer tout le cache!\nÊtes-vous sûr?"
+            "Attention: Cette action va effacer tout le cache!\nÊtes-vous sûr?"
         ):
-            self.ui.print_error(constants.ERROR_MESSAGES['OPERATION_CANCELLED'])
+            self.console.error(constants.ERROR_MESSAGES['OPERATION_CANCELLED'])
             return
 
         try:
             self.ollama.clear_cache()
-            self.ui.print_success("Cache effacé avec succès!")
+            self.console.success("Cache effacé avec succès!")
             self.logger.info("Cache Ollama effacé par l'utilisateur")
+
         except Exception as e:
-            self.ui.print_error(f"Erreur lors de l'effacement du cache: {e}")
+            self.console.error(f"Erreur lors de l'effacement du cache: {e}")
             self.logger.error(f"Erreur effacement cache: {e}")
 
-    def show_hardware_info(self):
-        """Affiche les informations hardware et optimisations"""
-        print("\n" + "="*60)
-        print("🖥️  INFORMATIONS HARDWARE")
-        print("="*60)
-
-        try:
-            optimizer = HardwareOptimizer(self.logger)
-            print(optimizer.get_optimization_report())
-        except Exception as e:
-            print(f"❌ Erreur lors de la récupération des infos hardware: {e}")
-            self.logger.error(f"Erreur hardware info: {e}")
+    # ═══════════════════════════════════════════════════════════════
+    # SNAPSHOTS & ROLLBACK
+    # ═══════════════════════════════════════════════════════════════
 
     def show_snapshots(self):
         """Affiche la liste des snapshots disponibles"""
         if not self.agent:
-            self.ui.print_error(constants.ERROR_MESSAGES['NO_AGENT'])
+            self.console.error(constants.ERROR_MESSAGES['NO_AGENT'])
             return
 
         try:
             snapshots = self.agent.list_snapshots()
-            self.stats_displayer.display_snapshots_list(snapshots)
+
+            if not snapshots:
+                self.console.warning("Aucun snapshot disponible")
+                return
+
+            # Créer une table pour les snapshots
+            stats_data = {}
+            for idx, snapshot in enumerate(snapshots, 1):
+                timestamp = snapshot.get('timestamp', 'N/A')
+                project = snapshot.get('project', 'N/A')
+                stats_data[f"#{idx} - {timestamp}"] = project
+
+            table = create_stats_table(stats_data, title="Snapshots Disponibles")
+            self.console.print(table)
+
         except Exception as e:
-            self.ui.print_error(f"Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
             self.logger.error(f"Erreur affichage snapshots: {e}")
 
     def restore_snapshot(self, snapshot_id: Optional[str] = None):
         """Restaure un snapshot"""
         if not self.agent:
-            self.ui.print_error(constants.ERROR_MESSAGES['NO_AGENT'])
+            self.console.error(constants.ERROR_MESSAGES['NO_AGENT'])
             return
 
         # Message de confirmation
@@ -329,158 +385,228 @@ class DisplayManager:
         msg += "Toutes les modifications actuelles seront perdues!"
 
         if not self.input_validator.confirm_action(msg):
-            self.ui.print_error("Rollback annulé")
+            self.console.error("Rollback annulé")
             return
 
-        print("\n🔄 Restauration en cours...")
+        with self.console.create_status("Restauration en cours..."):
+            try:
+                result = self.agent.rollback_last_execution(snapshot_id)
 
-        try:
-            result = self.agent.rollback_last_execution(snapshot_id)
+                if result['success']:
+                    self.console.success("Rollback réussi!")
+                    self.console.print(f"   Projet restauré: {result['project_path']}")
+                    self.logger.info(f"Rollback effectué vers: {result.get('snapshot_id')}")
+                else:
+                    self.console.error(f"Erreur lors du rollback: {result.get('error')}")
+                    self.logger.error(f"Erreur rollback: {result.get('error')}")
 
-            if result['success']:
-                self.ui.print_success("Rollback réussi!")
-                print(f"   Projet restauré: {result['project_path']}")
-                self.logger.info(f"Rollback effectué vers: {result.get('snapshot_id')}")
-            else:
-                self.ui.print_error(f"Erreur lors du rollback: {result.get('error')}")
-                self.logger.error(f"Erreur rollback: {result.get('error')}")
-
-        except Exception as e:
-            self.ui.print_error(f"Erreur: {e}")
-            self.logger.error(f"Erreur rollback: {e}")
+            except Exception as e:
+                self.console.error(f"Erreur: {e}")
+                self.logger.error(f"Erreur rollback: {e}")
 
     def show_rollback_stats(self):
         """Affiche les statistiques de rollback"""
         if not self.agent:
-            self.ui.print_error(constants.ERROR_MESSAGES['NO_AGENT'])
+            self.console.error(constants.ERROR_MESSAGES['NO_AGENT'])
             return
 
         try:
             stats = self.agent.get_rollback_stats()
-            self.stats_displayer.display_rollback_stats(stats)
+            table = create_stats_table(stats, title="Statistiques de Rollback")
+            self.console.print(table)
+
         except Exception as e:
-            self.ui.print_error(f"Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
             self.logger.error(f"Erreur stats rollback: {e}")
+
+    # ═══════════════════════════════════════════════════════════════
+    # SÉCURITÉ & CORRECTIONS
+    # ═══════════════════════════════════════════════════════════════
 
     def show_security_report(self):
         """Affiche le rapport de sécurité"""
         try:
             report = self.security.get_security_report()
-            self.stats_displayer.display_security_report(report)
+            table = create_stats_table(report, title="Rapport de Sécurité")
+            self.console.print(table)
+
         except Exception as e:
-            self.ui.print_error(f"Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
             self.logger.error(f"Erreur rapport sécurité: {e}")
 
     def show_correction_stats(self):
         """Affiche les statistiques d'auto-correction"""
         if not self.agent:
-            self.ui.print_error(constants.ERROR_MESSAGES['NO_AGENT'])
+            self.console.error(constants.ERROR_MESSAGES['NO_AGENT'])
             return
 
         try:
             stats = self.agent.get_correction_stats()
-            self.stats_displayer.display_correction_stats(stats)
+            table = create_stats_table(stats, title="Statistiques d'Auto-correction")
+            self.console.print(table)
+
         except Exception as e:
-            self.ui.print_error(f"Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
             self.logger.error(f"Erreur stats corrections: {e}")
 
     def show_last_error(self):
         """Affiche l'analyse de la dernière erreur"""
         if not self.agent:
-            self.ui.print_error(constants.ERROR_MESSAGES['NO_AGENT'])
+            self.console.error(constants.ERROR_MESSAGES['NO_AGENT'])
             return
 
         try:
             analysis = self.agent.get_last_error_analysis()
-            self.stats_displayer.display_error_analysis(analysis)
+
+            if not analysis:
+                self.console.warning("Aucune erreur récente analysée")
+                return
+
+            # Afficher l'analyse dans un panel
+            content = f"Type: {analysis.get('error_type', 'N/A')}\n"
+            content += f"Message: {analysis.get('error_message', 'N/A')}\n"
+
+            if analysis.get('auto_fix'):
+                content += f"\nCorrection tentée: {analysis['auto_fix']}"
+
+            panel = create_error_panel(content, title="Analyse de la Dernière Erreur")
+            self.console.print(panel)
+
         except Exception as e:
-            self.ui.print_error(f"Erreur: {e}")
+            self.console.error(f"Erreur: {e}")
             self.logger.error(f"Erreur affichage erreur: {e}")
+
+    # ═══════════════════════════════════════════════════════════════
+    # STATUT DU SHELL
+    # ═══════════════════════════════════════════════════════════════
 
     def show_shell_status(self):
         """Affiche le statut du shell et les statistiques"""
         stats = self.shell_engine.get_statistics()
 
-        print("\n" + "="*60)
-        print("🖥️  STATUT DU SHELL COTER")
-        print("="*60)
+        # Informations principales
+        self.console.print("\n[title]STATUT DU SHELL COTER[/title]")
+        self.console.print()
 
-        mode_icon = self.shell_engine.get_prompt_symbol()
-        print(f"\n{mode_icon}  Mode actuel: {stats['current_mode'].upper()}")
-        print(f"   {self.shell_engine.get_mode_description()}")
+        mode = stats['current_mode'].upper()
+        mode_style = f"mode.{stats['current_mode']}"
+        self.console.print(f"[{mode_style}]Mode actuel:[/{mode_style}] {mode}")
+        self.console.print(f"[dim]{self.shell_engine.get_mode_description()}[/dim]")
+        self.console.print()
 
-        print(f"\n📊 Statistiques de session:")
-        print(f"   • Mode de démarrage: {stats['session_start_mode']}")
-        print(f"   • Changements de mode: {stats['mode_changes']}")
-        print(f"   • Total de commandes: {stats['total_commands']}")
+        # Statistiques de session
+        session_data = {
+            "Mode de démarrage": stats['session_start_mode'],
+            "Changements de mode": stats['mode_changes'],
+            "Total de commandes": stats['total_commands']
+        }
 
-        print(f"\n📈 Commandes par mode:")
-        for mode, count in stats['command_counts'].items():
-            print(f"   • {mode.upper()}: {count}")
+        table = create_stats_table(session_data, title="Statistiques de Session")
+        self.console.print(table)
 
+        # Commandes par mode
+        if stats['command_counts']:
+            self.console.print("\n[subtitle]Commandes par mode:[/subtitle]")
+            for mode, count in stats['command_counts'].items():
+                self.console.print(f"   [label]{mode.upper()}:[/label] {count}")
+
+        # Historique des modes
         if len(stats['mode_history']) > 1:
-            print(f"\n🔄 Historique des modes:")
             history_display = " → ".join(stats['mode_history'])
-            print(f"   {history_display}")
+            self.console.print(f"\n[subtitle]Historique des modes:[/subtitle]")
+            self.console.print(f"   [dim]{history_display}[/dim]")
 
-        print("="*60)
+        self.console.print()
 
-    # ========== Callbacks pour le mode Agent ==========
+    # ═══════════════════════════════════════════════════════════════
+    # CALLBACKS POUR LE MODE AGENT
+    # ═══════════════════════════════════════════════════════════════
 
     def on_agent_step_start(self, step_number: int, step: dict):
         """Callback appelé au début de chaque étape de l'agent"""
         total_steps = len(self.agent.current_plan.get('steps', []))
         description = step.get('description', 'Action')
-        action_icon = {
-            'create_structure': '📁',
-            'create_file': '📝',
-            'run_command': '⚙️',
-            'git_commit': '📦'
-        }.get(step.get('action', ''), '🔨')
 
-        print(f"\n[{step_number}/{total_steps}] {action_icon}  {description}...")
+        # Icônes pour les actions
+        action_icons = {
+            'create_structure': '[dim]📁[/dim]',
+            'create_file': '[dim]📝[/dim]',
+            'run_command': '[dim]⚙[/dim]',
+            'git_commit': '[dim]📦[/dim]'
+        }
+        icon = action_icons.get(step.get('action', ''), '[dim]🔨[/dim]')
+
+        self.console.print(f"\n[label][{step_number}/{total_steps}][/label] {icon}  {description}...")
 
     def on_agent_step_complete(self, step_number: int, step: dict, result: dict):
         """Callback appelé à la fin de chaque étape de l'agent"""
         if result.get('success'):
             # Afficher des détails selon le type d'action
-            if step.get('action') == 'create_file':
+            action = step.get('action')
+
+            if action == 'create_file':
                 lines = result.get('lines_written', 0)
-                print(f"      ✅ Fichier créé: {result.get('file_path')} ({lines} lignes)")
-            elif step.get('action') == 'create_structure':
+                file_path = result.get('file_path', 'N/A')
+                status = create_status_text(True, f"Fichier créé: {file_path} ({lines} lignes)")
+                self.console.print("      ", status)
+
+            elif action == 'create_structure':
                 count = result.get('count', 0)
-                print(f"      ✅ {count} dossier{'s' if count > 1 else ''} créé{'s' if count > 1 else ''}")
-            elif step.get('action') == 'git_commit':
-                print(f"      ✅ Commit: {result.get('message', 'OK')}")
-            elif step.get('action') == 'run_command':
-                # Phase 3: Afficher les infos de retry si présentes
+                plural = 's' if count > 1 else ''
+                status = create_status_text(True, f"{count} dossier{plural} créé{plural}")
+                self.console.print("      ", status)
+
+            elif action == 'git_commit':
+                message = result.get('message', 'OK')
+                status = create_status_text(True, f"Commit: {message}")
+                self.console.print("      ", status)
+
+            elif action == 'run_command':
                 attempts = result.get('attempts', 1)
+
                 if attempts > 1:
-                    print(f"      ✅ Terminé (après {attempts} tentatives)")
+                    status = create_status_text(True, f"Terminé (après {attempts} tentatives)")
+                    self.console.print("      ", status)
+
                     # Afficher l'historique de retry
                     retry_history = result.get('retry_history', [])
                     if retry_history:
-                        print(f"         🔄 Retries:")
+                        self.console.print("         [dim]Retries:[/dim]")
                         for retry in retry_history:
-                            print(f"            • Tentative {retry['attempt']}: {retry['error_type']} (confiance: {int(retry.get('confidence', 0)*100)}%)")
+                            attempt = retry['attempt']
+                            error_type = retry['error_type']
+                            confidence = int(retry.get('confidence', 0) * 100)
+                            self.console.print(
+                                f"            [dim]• Tentative {attempt}: {error_type} (confiance: {confidence}%)[/dim]"
+                            )
                 else:
-                    print(f"      ✅ Terminé")
+                    status = create_status_text(True, "Terminé")
+                    self.console.print("      ", status)
             else:
-                print(f"      ✅ Terminé")
+                status = create_status_text(True, "Terminé")
+                self.console.print("      ", status)
         else:
-            # Phase 3: Afficher les infos d'analyse d'erreur
+            # Affichage en cas d'échec
             attempts = result.get('attempts', 0)
+
             if attempts > 1:
-                print(f"      ⚠️  Échec après {attempts} tentatives")
+                status = create_status_text(False, f"Échec après {attempts} tentatives")
+                self.console.print("      ", status)
+
                 last_analysis = result.get('last_analysis')
                 if last_analysis:
-                    print(f"         Type: {last_analysis.get('error_type', 'unknown')}")
+                    error_type = last_analysis.get('error_type', 'unknown')
+                    self.console.print(f"         [dim]Type: {error_type}[/dim]")
+
                     if last_analysis.get('auto_fix'):
-                        print(f"         Correction tentée: {last_analysis['auto_fix']}")
+                        self.console.print(f"         [dim]Correction tentée: {last_analysis['auto_fix']}[/dim]")
             else:
-                print(f"      ⚠️  {result.get('error', 'Erreur')}")
+                error_msg = result.get('error', 'Erreur inconnue')
+                status = create_status_text(False, error_msg)
+                self.console.print("      ", status)
 
     def on_agent_error(self, step_number: int, step: dict, error: dict):
         """Callback appelé en cas d'erreur dans l'agent"""
-        print(f"\n⚠️  Erreur à l'étape {step_number}")
-        print(f"    {error.get('error', 'Erreur inconnue')}")
+        error_msg = error.get('error', 'Erreur inconnue')
+        self.console.error(f"Erreur à l'étape {step_number}")
+        self.console.print(f"    [dim]{error_msg}[/dim]")

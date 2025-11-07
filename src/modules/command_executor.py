@@ -122,6 +122,101 @@ class CommandExecutor:
             self.logger.error(error_msg, exc_info=True)
             return create_error_result(error_msg)
 
+    def execute_streaming(self, command: str, output_callback=None, timeout: int = 30, strict_mode: bool = True) -> Dict[str, Any]:
+        """
+        Exécute une commande shell avec affichage en temps réel (streaming)
+
+        Args:
+            command: La commande à exécuter
+            output_callback: Fonction appelée pour chaque ligne de sortie (callback(line: str))
+            timeout: Timeout en secondes (défaut: 30)
+            strict_mode: Si True, validation stricte (mode AUTO/AGENT). Si False, validation minimale (mode MANUAL)
+
+        Returns:
+            Dict avec 'success', 'output', 'error', 'return_code'
+        """
+        if not command or not command.strip():
+            return create_error_result('Commande vide')
+
+        # Gérer la commande cd séparément
+        if command.strip().startswith('cd '):
+            return self._handle_cd(command)
+
+        # Validation de sécurité
+        is_safe, error_msg = self._validate_shell_command(command, strict_mode)
+        if not is_safe:
+            self.logger.error(f"Commande bloquée pour raisons de sécurité: {error_msg}")
+            return create_error_result(f'Sécurité: {error_msg}')
+
+        try:
+            self.logger.info(f"Exécution streaming de la commande: {command}")
+
+            # Utiliser Popen au lieu de run pour permettre le streaming
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Combiner stderr avec stdout
+                text=True,
+                bufsize=1,  # Line buffered - important pour le streaming
+                cwd=self.current_directory,
+                env=os.environ.copy()
+            )
+
+            # Lire la sortie ligne par ligne EN TEMPS RÉEL
+            output_lines = []
+            total_size = 0
+
+            for line in iter(process.stdout.readline, ''):
+                if not line:
+                    break
+
+                # Vérifier la limite de taille
+                line_size = len(line.encode('utf-8'))
+                if total_size + line_size > self.max_output_size:
+                    truncation_msg = f"\n[... Sortie tronquée à {self.max_output_size / 1024:.0f}KB ...]\n"
+                    output_lines.append(truncation_msg)
+                    if output_callback:
+                        output_callback(truncation_msg.rstrip())
+                    self.logger.warning(f"Sortie tronquée: {total_size / 1024:.1f}KB > {self.max_output_size / 1024:.0f}KB")
+                    break
+
+                output_lines.append(line)
+                total_size += line_size
+
+                # Callback pour affichage en temps réel
+                if output_callback:
+                    output_callback(line.rstrip('\n\r'))
+
+            # Attendre la fin du processus avec timeout
+            try:
+                return_code = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                error_msg = f"Timeout après {timeout}s"
+                self.logger.error(error_msg)
+                return create_error_result(error_msg, -1, ''.join(output_lines))
+
+            # Construire le résultat
+            full_output = ''.join(output_lines)
+            success = return_code == 0
+
+            if success:
+                self.logger.debug(f"Commande streaming réussie. Output size: {total_size / 1024:.1f}KB")
+                result_dict = create_success_result(full_output, return_code)
+                if total_size >= self.max_output_size:
+                    result_dict['truncated'] = True
+                    result_dict['original_size_kb'] = total_size / 1024
+                return result_dict
+            else:
+                self.logger.warning(f"Commande streaming échouée (code {return_code})")
+                return create_error_result(full_output, return_code, full_output)
+
+        except Exception as e:
+            error_msg = f"Erreur lors de l'exécution streaming: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            return create_error_result(error_msg)
+
     def _handle_cd(self, command: str) -> Dict[str, Any]:
         """
         Gère la commande cd (changement de répertoire)

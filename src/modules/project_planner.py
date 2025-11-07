@@ -3,6 +3,11 @@
 import json
 from typing import Dict, List, Optional
 from pathlib import Path
+from rich.panel import Panel
+from rich.table import Table
+from rich import box
+from rich.text import Text
+from src.terminal.rich_console import get_console
 
 class ProjectPlanner:
     """Analyse les demandes et génère des plans de projets"""
@@ -257,47 +262,85 @@ Sois précis et complet. Liste TOUS les fichiers nécessaires (code, config, rea
 
     def display_plan(self, plan: Dict) -> str:
         """
-        Formate un plan pour l'affichage
+        Formate un plan pour l'affichage avec Rich
 
         Args:
             plan: Plan à afficher
 
         Returns:
-            String formaté pour affichage
+            String formaté pour affichage (sera print() par l'appelant)
         """
-        output = []
-        output.append("╔════════════════════════════════════════════════════════════╗")
-        output.append("║           PLAN D'EXÉCUTION AUTONOME                        ║")
-        output.append("╠════════════════════════════════════════════════════════════╣")
-        output.append(f"║ Projet: {plan.get('project_name', 'N/A'):<50} ║")
-        output.append(f"║ Description: {plan.get('description', 'N/A')[:43]:<43} ║")
+        console = get_console()
 
-        if plan.get('estimated_time'):
-            output.append(f"║ Temps estimé: ~{plan['estimated_time']} minutes{' '*(36-len(plan['estimated_time']))}║")
+        # Informations du projet
+        project_name = plan.get('project_name', 'N/A')
+        description = plan.get('description', 'N/A')
+        estimated_time = plan.get('estimated_time', 'N/A')
 
-        output.append("╠════════════════════════════════════════════════════════════╣")
+        # Panel d'informations projet
+        info_text = Text()
+        info_text.append("Projet: ", style="label")
+        info_text.append(f"{project_name}\n", style="bold cyan")
+        info_text.append("Description: ", style="label")
+        info_text.append(f"{description}\n", style="bright_white")
 
-        # Afficher les étapes
+        if estimated_time != 'N/A':
+            info_text.append("Temps estimé: ", style="label")
+            info_text.append(f"~{estimated_time} minutes", style="dim")
+
+        info_panel = Panel(
+            info_text,
+            title="[bold]PLAN D'EXÉCUTION AUTONOME[/bold]",
+            border_style="mode.agent",
+            box=box.ROUNDED,
+            padding=(1, 2)
+        )
+
+        # Table des étapes
+        steps_table = Table(
+            title="Étapes du Plan",
+            show_header=True,
+            box=box.SIMPLE,
+            border_style="mode.agent"
+        )
+
+        steps_table.add_column("#", style="dim", width=4, justify="right")
+        steps_table.add_column("Action", style="info", width=15)
+        steps_table.add_column("Description", style="bright_white", no_wrap=False)
+
+        # Icônes par type d'action (sans emojis, utiliser des symboles Rich)
+        action_styles = {
+            'create_structure': ("[dim]DIR[/dim]", "Créer structure"),
+            'create_file': ("[dim]FILE[/dim]", "Créer fichier"),
+            'run_command': ("[dim]CMD[/dim]", "Exécuter commande"),
+            'git_commit': ("[dim]GIT[/dim]", "Commit Git")
+        }
+
         for i, step in enumerate(plan.get('steps', []), 1):
-            action_icon = {
-                'create_structure': '📁',
-                'create_file': '📝',
-                'run_command': '⚙️',
-                'git_commit': '📦'
-            }.get(step.get('action', ''), '🔨')
+            action = step.get('action', 'unknown')
+            action_label, action_type = action_styles.get(action, ("[dim]ACT[/dim]", "Action"))
+            description = step.get('description', 'N/A')
 
-            desc = step.get('description', 'Action')[:50]
-            output.append(f"║ Étape {i:2}: {action_icon} {desc:<48} ║")
+            steps_table.add_row(
+                str(i),
+                action_type,
+                description
+            )
 
-        output.append("╚════════════════════════════════════════════════════════════╝")
-
-        # Afficher les dépendances si présentes
+        # Dépendances (si présentes)
+        deps_text = ""
         if plan.get('dependencies'):
-            output.append("\n📦 Dépendances à installer:")
-            for dep in plan['dependencies']:
-                output.append(f"   • {dep}")
+            deps_list = "\n".join([f"  • {dep}" for dep in plan['dependencies']])
+            deps_text = f"\n\n[label]Dépendances à installer:[/label]\n{deps_list}"
 
-        return '\n'.join(output)
+        # Capture la sortie Rich en string pour retourner
+        with console.console.capture() as capture:
+            console.console.print(info_panel)
+            console.console.print(steps_table)
+            if deps_text:
+                console.console.print(deps_text)
+
+        return capture.get()
 
     def get_current_plan(self) -> Optional[Dict]:
         """Retourne le plan actuel"""

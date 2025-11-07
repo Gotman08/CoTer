@@ -9,6 +9,11 @@ from pathlib import Path
 import getpass
 import platform
 
+from rich.panel import Panel
+from rich.text import Text
+from rich import box
+from src.terminal.rich_console import get_console
+
 
 class PromptManager:
     """
@@ -262,35 +267,50 @@ class PromptManager:
         Returns:
             Bannière formatée
         """
-        banner_lines = [
-            "",
-            self.colorize("╔════════════════════════════════════════════════════════════╗", "cyan"),
-            self.colorize("║", "cyan") + self.colorize("  CoTer - Terminal IA Autonome", "bright_white").center(68) + self.colorize("║", "cyan"),
-            self.colorize("║", "cyan") + f"  Version {version}".center(60) + self.colorize("║", "cyan"),
-            self.colorize("╠════════════════════════════════════════════════════════════╣", "cyan"),
-            self.colorize("║", "cyan") + f"  Mode: {mode.upper()}".ljust(60) + self.colorize("║", "cyan"),
-            self.colorize("║", "cyan") + "  Commandes: /manual /auto /agent /help /quit".ljust(60) + self.colorize("║", "cyan"),
-            self.colorize("╚════════════════════════════════════════════════════════════╝", "cyan"),
-            ""
-        ]
+        console = get_console()
 
-        return '\n'.join(banner_lines)
+        # Titre
+        title = Text()
+        title.append("CoTer", style="bold cyan")
+        title.append(" - Terminal IA Autonome", style="bright_white")
+
+        # Contenu
+        content = Text()
+        content.append(f"Version {version}\n", style="dim", justify="center")
+        content.append(f"\nMode: ", style="label")
+        content.append(f"{mode.upper()}\n", style=f"mode.{mode.lower()}")
+        content.append("\nCommandes: ", style="label")
+        content.append("/manual /auto /agent /help /quit", style="dim")
+
+        # Capture Rich output
+        with console.console.capture() as capture:
+            console.console.print()  # Ligne vide avant
+            console.console.print(Panel(
+                content,
+                title=title,
+                border_style="cyan",
+                box=box.ROUNDED,
+                padding=(1, 2)
+            ))
+            console.console.print()  # Ligne vide après
+
+        return capture.get()
 
     def format_error(self, message: str) -> str:
         """Formate un message d'erreur"""
-        return self.colorize(f"❌ {message}", "red")
+        return self.colorize(f"✗ {message}", "red")
 
     def format_success(self, message: str) -> str:
         """Formate un message de succès"""
-        return self.colorize(f"✅ {message}", "green")
+        return self.colorize(f"✓ {message}", "green")
 
     def format_warning(self, message: str) -> str:
         """Formate un avertissement"""
-        return self.colorize(f"⚠️  {message}", "yellow")
+        return self.colorize(f"! {message}", "yellow")
 
     def format_info(self, message: str) -> str:
         """Formate une information"""
-        return self.colorize(f"ℹ️  {message}", "blue")
+        return self.colorize(f"i {message}", "blue")
 
     def get_prompt_config(self) -> Dict[str, Any]:
         """

@@ -1,5 +1,12 @@
 """Prompts système pour l'interaction avec Ollama"""
 
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich.progress import Progress, BarColumn, TextColumn
+from rich import box
+from src.terminal.rich_console import get_console
+
 SYSTEM_PROMPT_MAIN = """Tu es un assistant IA autonome intégré dans un terminal Linux.
 Tu dois aider l'utilisateur à exécuter des commandes shell sur son système.
 
@@ -56,95 +63,177 @@ Analyse l'erreur et suggère:
 Sois concis et pratique.
 """
 
-HELP_TEXT = """
-╔════════════════════════════════════════════════════════════════╗
-║           TERMINAL IA AUTONOME - AIDE                          ║
-╠════════════════════════════════════════════════════════════════╣
-║                                                                ║
-║  UTILISATION:                                                  ║
-║  - Tapez votre demande en langage naturel                      ║
-║  - L'IA va générer et exécuter la commande appropriée          ║
-║                                                                ║
-║  COMMANDES SPÉCIALES:                                          ║
-║  /help      - Affiche cette aide                               ║
-║  /clear     - Efface l'historique de conversation              ║
-║  /history   - Affiche l'historique des commandes               ║
-║  /models    - Liste les modèles Ollama disponibles             ║
-║  /info      - Affiche les informations système                 ║
-║  /templates - Liste les templates de projets                   ║
-║  /agent     - Active le mode agent autonome                    ║
-║  /pause     - Met en pause l'agent autonome                    ║
-║  /resume    - Reprend l'agent autonome                         ║
-║  /stop      - Arrête l'agent autonome                          ║
-║  /cache     - Affiche les stats du cache (/cache clear = vider)║
-║  /hardware  - Affiche les infos hardware et optimisations      ║
-║  /rollback  - Gère les snapshots (/rollback list|restore|stats)║
-║  /security  - Affiche le rapport de sécurité des commandes     ║
-║  /corrections - Stats auto-correction (/corrections stats|last)║
-║  /quit      - Quitte le terminal IA                            ║
-║                                                                ║
-║  EXEMPLES DE DEMANDES SIMPLES:                                 ║
-║  • "liste les fichiers du dossier actuel"                      ║
-║  • "montre-moi l'espace disque disponible"                     ║
-║  • "affiche les processus en cours"                            ║
-║  • "crée un dossier nommé test"                                ║
-║                                                                ║
-║  MODE AGENT AUTONOME (Projets Complexes):                      ║
-║  • "crée-moi une API REST avec FastAPI"                        ║
-║  • "fais-moi un bot Discord"                                   ║
-║  • "génère un projet Flask avec authentification"              ║
-║  L'agent planifiera et exécutera toutes les étapes!            ║
-║                                                                ║
-║  SÉCURITÉ:                                                     ║
-║  • Les commandes dangereuses nécessitent une confirmation      ║
-║  • Certaines commandes sont bloquées pour votre sécurité       ║
-║  • Tous les logs sont enregistrés dans ./logs/                 ║
-║                                                                ║
-╚════════════════════════════════════════════════════════════════╝
-"""
+def get_help_text() -> str:
+    """
+    Génère le texte d'aide avec Rich Panel.
 
-ASCII_LOGO = """
- ╔══════════════════════════════════════════════════════════════╗
- ║                                                              ║
- ║   ████████╗███████╗██████╗ ███╗   ███╗██╗███╗   ██╗ █████╗  ║
- ║   ╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██║████╗  ██║██╔══██╗ ║
- ║      ██║   █████╗  ██████╔╝██╔████╔██║██║██╔██╗ ██║███████║ ║
- ║      ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║██║██║╚██╗██║██╔══██║ ║
- ║      ██║   ███████╗██║  ██║██║ ╚═╝ ██║██║██║ ╚████║██║  ██║ ║
- ║      ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ║
- ║                                                              ║
- ║                🤖  Terminal IA Autonome  🤖                  ║
- ║                     Propulsé par Ollama                      ║
- ║                                                              ║
- ╚══════════════════════════════════════════════════════════════╝
-"""
+    Returns:
+        String formaté avec Rich
+    """
+    console = get_console()
 
-GOODBYE_MESSAGE = """
-╔════════════════════════════════════════╗
-║                                        ║
-║     Merci d'avoir utilisé             ║
-║     Terminal IA Autonome              ║
-║                                        ║
-║     À bientôt! 👋                     ║
-║                                        ║
-╚════════════════════════════════════════╝
-"""
+    # Table des commandes
+    commands_table = Table(
+        show_header=True,
+        box=box.SIMPLE,
+        border_style="info",
+        padding=(0, 1)
+    )
+
+    commands_table.add_column("Commande", style="info", no_wrap=True)
+    commands_table.add_column("Description", style="bright_white")
+
+    # Commandes de base
+    commands_table.add_row("/help", "Affiche cette aide")
+    commands_table.add_row("/clear", "Efface l'historique de conversation")
+    commands_table.add_row("/history", "Affiche l'historique des commandes")
+    commands_table.add_row("/models", "Liste les modèles Ollama disponibles")
+    commands_table.add_row("/info", "Affiche les informations système")
+    commands_table.add_row("/templates", "Liste les templates de projets")
+    commands_table.add_section()
+
+    # Mode agent
+    commands_table.add_row("/agent", "Active le mode agent autonome")
+    commands_table.add_row("/pause", "Met en pause l'agent autonome")
+    commands_table.add_row("/resume", "Reprend l'agent autonome")
+    commands_table.add_row("/stop", "Arrête l'agent autonome")
+    commands_table.add_section()
+
+    # Utilitaires
+    commands_table.add_row("/cache", "Stats du cache (/cache clear)")
+    commands_table.add_row("/hardware", "Infos hardware et optimisations")
+    commands_table.add_row("/rollback", "Gère snapshots (list|restore|stats)")
+    commands_table.add_row("/security", "Rapport de sécurité")
+    commands_table.add_row("/corrections", "Stats auto-correction (stats|last)")
+    commands_table.add_row("/quit", "Quitte le terminal IA")
+
+    # Panel avec sections d'information
+    info_text = Text()
+    info_text.append("\nUTILISATION:\n", style="subtitle")
+    info_text.append("  • Tapez votre demande en langage naturel\n", style="bright_white")
+    info_text.append("  • L'IA va générer et exécuter la commande appropriée\n\n", style="bright_white")
+
+    info_text.append("EXEMPLES DE DEMANDES SIMPLES:\n", style="subtitle")
+    info_text.append("  • liste les fichiers du dossier actuel\n", style="dim")
+    info_text.append("  • montre-moi l'espace disque disponible\n", style="dim")
+    info_text.append("  • affiche les processus en cours\n", style="dim")
+    info_text.append("  • crée un dossier nommé test\n\n", style="dim")
+
+    info_text.append("MODE AGENT AUTONOME (Projets Complexes):\n", style="subtitle")
+    info_text.append("  • crée-moi une API REST avec FastAPI\n", style="mode.agent")
+    info_text.append("  • fais-moi un bot Discord\n", style="mode.agent")
+    info_text.append("  • génère un projet Flask avec authentification\n", style="mode.agent")
+    info_text.append("  L'agent planifiera et exécutera toutes les étapes!\n\n", style="dim")
+
+    info_text.append("SÉCURITÉ:\n", style="subtitle")
+    info_text.append("  • Les commandes dangereuses nécessitent confirmation\n", style="warning")
+    info_text.append("  • Certaines commandes sont bloquées\n", style="warning")
+    info_text.append("  • Logs enregistrés dans ./logs/\n", style="dim")
+
+    # Capture la sortie Rich
+    with console.console.capture() as capture:
+        console.console.print(Panel(
+            info_text,
+            title="[bold]TERMINAL IA AUTONOME - AIDE[/bold]",
+            border_style="info",
+            box=box.ROUNDED,
+            padding=(1, 2)
+        ))
+        console.console.print(commands_table)
+
+    return capture.get()
+
+# Backward compatibility: Garde la constante pour ne pas casser le code existant
+HELP_TEXT = get_help_text()
+
+def get_ascii_logo() -> str:
+    """
+    Génère le logo de bienvenue avec Rich Panel.
+
+    Returns:
+        String formaté avec Rich
+    """
+    console = get_console()
+
+    # Titre stylisé
+    title_text = Text("TERMINAL IA AUTONOME\nCoTer\n\nPropulsé par Ollama + Rich Library",
+                      justify="center")
+    # Style les différentes parties
+    title_text.stylize("bold bright_white", 0, 20)  # "TERMINAL IA AUTONOME"
+    title_text.stylize("bold cyan", 21, 26)  # "CoTer"
+    title_text.stylize("dim italic", 28)
+
+    # Panel
+    with console.console.capture() as capture:
+        console.console.print(Panel(
+            title_text,
+            border_style="cyan",
+            box=box.DOUBLE,
+            padding=(1, 2)
+        ))
+
+    return capture.get()
+
+# Backward compatibility
+ASCII_LOGO = get_ascii_logo()
+
+def get_goodbye_message() -> str:
+    """
+    Génère le message d'au revoir avec Rich Panel.
+
+    Returns:
+        String formaté avec Rich
+    """
+    console = get_console()
+
+    content = Text("Merci d'avoir utilisé\nTerminal IA Autonome\n\nÀ bientôt!", justify="center")
+    content.stylize("bright_white", 0, 22)  # "Merci d'avoir utilisé"
+    content.stylize("bold cyan", 23, 45)  # "Terminal IA Autonome"
+    content.stylize("dim", 47)
+
+    with console.console.capture() as capture:
+        console.console.print(Panel(
+            content,
+            border_style="cyan",
+            box=box.ROUNDED,
+            padding=(1, 2)
+        ))
+
+    return capture.get()
+
+# Backward compatibility
+GOODBYE_MESSAGE = get_goodbye_message()
 
 # Messages pour le mode agent autonome
 
-AGENT_MODE_BANNER = """
-╔═══════════════════════════════════════════════════════════════╗
-║                                                               ║
-║             🤖  MODE AGENT AUTONOME ACTIVÉ  🤖               ║
-║                                                               ║
-║  L'IA va analyser votre demande, créer un plan d'action      ║
-║  et l'exécuter étape par étape automatiquement.              ║
-║                                                               ║
-║  Vous pourrez valider le plan avant l'exécution.             ║
-║  Appuyez sur Ctrl+C pour arrêter à tout moment.              ║
-║                                                               ║
-╚═══════════════════════════════════════════════════════════════╝
-"""
+def get_agent_mode_banner() -> str:
+    """
+    Génère le banner du mode agent avec Rich Panel.
+
+    Returns:
+        String formaté avec Rich
+    """
+    console = get_console()
+
+    content = Text()
+    content.append("MODE AGENT AUTONOME ACTIVÉ\n\n", style="bold mode.agent")
+    content.append("L'IA va analyser votre demande, créer un plan d'action\n", style="bright_white")
+    content.append("et l'exécuter étape par étape automatiquement.\n\n", style="bright_white")
+    content.append("Vous pourrez valider le plan avant l'exécution.\n", style="dim")
+    content.append("Appuyez sur Ctrl+C pour arrêter à tout moment.", style="dim")
+
+    with console.console.capture() as capture:
+        console.console.print(Panel(
+            content,
+            border_style="mode.agent",
+            box=box.HEAVY,
+            padding=(1, 2)
+        ))
+
+    return capture.get()
+
+# Backward compatibility
+AGENT_MODE_BANNER = get_agent_mode_banner()
 
 AGENT_ANALYZING = """
 🔍 Analyse de votre demande en cours...
@@ -187,7 +276,7 @@ AGENT_ERROR = """
 
 def format_step_progress(current: int, total: int, description: str) -> str:
     """
-    Formate l'affichage de progression d'une étape
+    Formate l'affichage de progression d'une étape avec Rich
 
     Args:
         current: Numéro de l'étape actuelle
@@ -195,16 +284,25 @@ def format_step_progress(current: int, total: int, description: str) -> str:
         description: Description de l'étape
 
     Returns:
-        String formaté
+        String formaté avec Rich
     """
-    progress_bar_length = 40
-    progress = int((current / total) * progress_bar_length)
-    bar = "█" * progress + "░" * (progress_bar_length - progress)
+    console = get_console()
+
+    # Calcul pourcentage
     percentage = int((current / total) * 100)
 
-    return f"""
-┌─────────────────────────────────────────────────────────────┐
-│ Progression: [{bar}] {percentage}%      │
-│ Étape {current}/{total}: {description[:45]:<45} │
-└─────────────────────────────────────────────────────────────┘
-"""
+    # Panel de progression
+    content = Text()
+    content.append(f"Progression: {percentage}%\n", style="label")
+    content.append(f"Étape {current}/{total}: ", style="dim")
+    content.append(description[:60], style="bright_white")
+
+    with console.console.capture() as capture:
+        console.console.print(Panel(
+            content,
+            border_style="mode.agent",
+            box=box.SIMPLE,
+            padding=(0, 1)
+        ))
+
+    return capture.get()
