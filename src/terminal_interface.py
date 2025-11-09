@@ -4,6 +4,8 @@ import sys
 import os
 from typing import Optional
 from src.modules import OllamaClient, CommandParser, CommandExecutor, AutonomousAgent
+from src.modules.background_planner import BackgroundPlanner
+from src.modules.plan_storage import PlanStorage
 from src.utils import (
     CommandLogger,
     InputValidator
@@ -113,6 +115,21 @@ class TerminalInterface:
                     logger
                 )
 
+            # Planificateur en arrière-plan (si activé et agent disponible)
+            self.background_planner = None
+            self.plan_storage = None
+            if getattr(settings, 'background_planning_enabled', True) and self.agent:
+                # Initialiser le stockage des plans
+                self.plan_storage = PlanStorage(logger=logger)
+
+                # Initialiser le planificateur en arrière-plan
+                self.background_planner = BackgroundPlanner(
+                    project_planner=self.agent.planner,
+                    logger=logger
+                )
+
+                logger.info("Planificateur en arrière-plan initialisé")
+
             # Initialiser le DisplayManager avec tous les composants
             components = {
                 'settings': self.settings,
@@ -134,6 +151,13 @@ class TerminalInterface:
                 self.agent.on_step_start = self.display_manager.on_agent_step_start
                 self.agent.on_step_complete = self.display_manager.on_agent_step_complete
                 self.agent.on_error = self.display_manager.on_agent_error
+
+            # Configurer les callbacks du planificateur en arrière-plan
+            if self.background_planner:
+                self.background_planner.on_planning_start = self._on_background_planning_start
+                self.background_planner.on_planning_complete = self._on_background_planning_complete
+                self.background_planner.on_analysis_complete = self._on_background_analysis_complete
+                self.background_planner.on_error = self._on_background_planning_error
 
             self.logger.info("Composants initialisés avec succès")
 
@@ -184,6 +208,11 @@ class TerminalInterface:
             warning_msg += "[dim]Vous pouvez continuer mais les commandes ne seront pas parsées.[/dim]"
 
             self.console.print(rich_components.create_warning_panel(warning_msg))
+
+        # Démarrer le planificateur en arrière-plan (si activé)
+        if self.background_planner:
+            self.background_planner.start()
+            self.logger.info("BackgroundPlanner démarré")
 
         # Boucle principale
         try:
@@ -404,6 +433,108 @@ class TerminalInterface:
                 self.console.print()
                 self.console.error("Commande corrections inconnue")
                 self.console.print("[dim]Usage: /corrections [stats|last][/dim]")
+
+        elif cmd_lower.startswith('/plan'):
+            # Commandes de gestion des plans en arrière-plan
+            if not self.background_planner:
+                self.console.print()
+                self.console.error("La planification en arrière-plan n'est pas activée")
+                return
+
+            parts = command.split()
+            if len(parts) == 1:
+                # /plan seul = afficher le dernier plan
+                latest_plan_data = self.background_planner.get_plan_from_queue()
+
+                if not latest_plan_data:
+                    # Vérifier dans le stockage
+                    if self.plan_storage:
+                        stored_plan = self.plan_storage.get_latest_plan(executed=False)
+                        if stored_plan:
+                            latest_plan_data = {
+                                'plan': stored_plan['plan'],
+                                'analysis': stored_plan['analysis'],
+                                'request_id': stored_plan['request_id']
+                            }
+
+                if latest_plan_data:
+                    self.display_manager.show_background_plan(latest_plan_data)
+
+                    # Proposer d'exécuter
+                    self.console.print()
+                    response = input("Exécuter ce plan ? (oui/non): ").strip().lower()
+                    if response in ['oui', 'o', 'yes', 'y']:
+                        plan = latest_plan_data['plan']
+                        exec_result = self.agent.execute_plan(plan)
+
+                        if exec_result.get('success'):
+                            self.console.success("✓ Plan exécuté avec succès!")
+
+                            # Marquer comme exécuté
+                            if self.plan_storage:
+                                recent_plans = self.plan_storage.get_recent_plans(limit=1, executed=False)
+                                if recent_plans:
+                                    self.plan_storage.mark_executed(recent_plans[0]['id'], 'success')
+                        else:
+                            self.console.error("❌ Échec de l'exécution du plan")
+                            if self.plan_storage:
+                                recent_plans = self.plan_storage.get_recent_plans(limit=1, executed=False)
+                                if recent_plans:
+                                    self.plan_storage.mark_executed(recent_plans[0]['id'], 'failed')
+                else:
+                    self.console.print()
+                    self.console.warning("Aucun plan disponible")
+
+            elif parts[1].lower() == 'stats':
+                # /plan stats = statistiques du planificateur
+                stats = self.background_planner.get_stats()
+                self.display_manager.show_plan_stats(stats)
+
+                # Ajouter les stats du stockage
+                if self.plan_storage:
+                    storage_stats = self.plan_storage.get_stats()
+                    self.console.print()
+                    self.console.print("[subtitle]Stockage des plans:[/subtitle]")
+                    self.console.print(f"   [label]Total:[/label] {storage_stats['total_plans']}")
+                    self.console.print(f"   [label]Exécutés:[/label] {storage_stats['executed']}")
+                    self.console.print(f"   [label]En attente:[/label] {storage_stats['pending']}")
+
+            elif parts[1].lower() == 'list':
+                # /plan list = lister les plans récents
+                if self.plan_storage:
+                    recent_plans = self.plan_storage.get_recent_plans(limit=10)
+
+                    if not recent_plans:
+                        self.console.print()
+                        self.console.warning("Aucun plan dans l'historique")
+                    else:
+                        self.console.print()
+                        self.console.print("[title]PLANS RÉCENTS[/title]")
+                        self.console.print()
+
+                        for idx, plan_data in enumerate(recent_plans, 1):
+                            status_icon = "✓" if plan_data['executed'] else "⏸"
+                            status_text = "Exécuté" if plan_data['executed'] else "En attente"
+
+                            self.console.print(f"[label]{idx}.[/label] {status_icon} {plan_data['user_request'][:60]}")
+                            self.console.print(f"   [dim]Type:[/dim] {plan_data['analysis'].get('project_type', 'N/A')}")
+                            self.console.print(f"   [dim]Date:[/dim] {plan_data['created_at']}")
+                            self.console.print(f"   [dim]Statut:[/dim] {status_text}")
+                            self.console.print()
+                else:
+                    self.console.print()
+                    self.console.error("Stockage des plans non disponible")
+
+            elif parts[1].lower() == 'clear':
+                # /plan clear = effacer les résultats en attente
+                self.background_planner.clear_results()
+                self.console.print()
+                self.console.success("Plans en attente effacés")
+
+            else:
+                self.console.print()
+                self.console.error("Commande plan inconnue")
+                self.console.print("[dim]Usage: /plan [stats|list|clear][/dim]")
 
         else:
             self.console.print()
@@ -724,26 +855,48 @@ class TerminalInterface:
         """
         self.logger.info(f"Entrée en mode AUTO itératif - Demande: {user_input[:100]}...")
         try:
-            # NOTE: Détection automatique de complexité DÉSACTIVÉE
-            # L'utilisateur peut basculer manuellement en mode AGENT avec /agent
-            # Cela évite les faux positifs et donne plus de contrôle à l'utilisateur
+            # PLANIFICATION EN ARRIÈRE-PLAN (si activée)
+            if self.background_planner and self.background_planner.is_running:
+                # Envoyer la requête pour analyse en arrière-plan
+                self.background_planner.analyze_request_async(user_input)
+                self.logger.debug("Requête envoyée au planificateur en arrière-plan")
 
-            # if self.agent and self.settings.agent_enabled:
-            #     with self.console.create_status("Analyse de la complexité...") as status:
-            #         analysis = self.agent.planner.analyze_request(user_input)
-            #
-            #     if analysis.get('is_complex'):
-            #         self.console.print()
-            #         self.console.info(f"Projet complexe détecté: {analysis.get('project_type')}")
-            #         self.console.info("Activation du mode agent autonome disponible")
-            #
-            #         response = input("\nUtiliser le mode agent autonome? (oui/non): ").strip().lower()
-            #         if response in ['oui', 'o', 'yes', 'y']:
-            #             self.shell_engine.switch_to_agent()
-            #             self._handle_autonomous_mode(user_input)
-            #             return
-            #         else:
-            #             self.console.warning("Mode agent annulé, traitement en mode itératif")
+                # Vérifier si un plan est déjà disponible (analyse rapide)
+                import time
+                time.sleep(0.1)  # Petit délai pour laisser l'analyse démarrer
+
+                # Récupérer le dernier plan disponible
+                latest_plan = self.background_planner.get_latest_plan()
+                latest_analysis = self.background_planner.get_latest_analysis()
+
+                # Si un plan complexe est disponible et auto-exécution activée
+                if (latest_plan and latest_analysis and
+                    latest_analysis.get('is_complex') and
+                    getattr(self.settings, 'background_planning_auto_execute', True)):
+
+                    self.console.print()
+                    self.console.info("🎯 Plan détecté pour cette requête")
+
+                    # Exécuter le plan automatiquement
+                    self.logger.info("Exécution automatique du plan en arrière-plan")
+
+                    exec_result = self.agent.execute_plan(latest_plan)
+
+                    if exec_result.get('success'):
+                        self.console.success("✓ Plan exécuté avec succès!")
+
+                        # Marquer comme exécuté dans le stockage
+                        if self.plan_storage:
+                            request_id = latest_plan.get('_metadata', {}).get('request_id')
+                            if request_id:
+                                # Récupérer l'ID du plan depuis la storage
+                                recent_plans = self.plan_storage.get_recent_plans(limit=1)
+                                if recent_plans:
+                                    self.plan_storage.mark_executed(recent_plans[0]['id'], 'success')
+
+                        return
+                    else:
+                        self.console.warning("⚠️  Le plan a échoué, passage en mode itératif")
 
             # BOUCLE ITÉRATIVE
             context_history = []  # Historique des commandes et résultats
@@ -982,6 +1135,74 @@ class TerminalInterface:
     def _quit(self):
         """Quitte l'application"""
         self.running = False
+
+        # Arrêter le planificateur en arrière-plan
+        if self.background_planner:
+            self.background_planner.stop()
+            self.logger.info("BackgroundPlanner arrêté")
+
         print(prompts.GOODBYE_MESSAGE)
         self.logger.info("Terminal IA arrêté")
         sys.exit(0)
+
+    # ═══════════════════════════════════════════════════════════════
+    # CALLBACKS PLANIFICATION EN ARRIÈRE-PLAN
+    # ═══════════════════════════════════════════════════════════════
+
+    def _on_background_planning_start(self):
+        """Callback appelé quand la planification en arrière-plan démarre"""
+        if self.display_manager:
+            self.display_manager.show_planning_indicator()
+
+    def _on_background_planning_complete(self, plan: Optional[dict], analysis: dict):
+        """
+        Callback appelé quand la planification en arrière-plan est terminée
+
+        Args:
+            plan: Plan généré (None si requête simple)
+            analysis: Analyse de la requête
+        """
+        # Effacer l'indicateur
+        if self.display_manager:
+            self.display_manager.hide_planning_indicator()
+
+        # Si un plan a été généré et que c'est activé
+        if plan and getattr(self.settings, 'background_planning_auto_execute', True):
+            # Sauvegarder le plan dans le stockage
+            if self.plan_storage:
+                request_id = plan.get('_metadata', {}).get('request_id', 'unknown')
+                user_request = plan.get('_metadata', {}).get('user_request', '')
+                planning_time = plan.get('_metadata', {}).get('planning_time', 0)
+
+                self.plan_storage.save_plan(
+                    request_id=request_id,
+                    user_request=user_request,
+                    analysis=analysis,
+                    plan=plan,
+                    planning_time=planning_time
+                )
+
+                self.logger.debug(f"Plan sauvegardé: {request_id}")
+
+    def _on_background_analysis_complete(self, analysis: dict):
+        """
+        Callback appelé quand l'analyse en arrière-plan est terminée
+
+        Args:
+            analysis: Résultat de l'analyse
+        """
+        # Log pour debug
+        self.logger.debug(f"Analyse complète: is_complex={analysis.get('is_complex')}")
+
+    def _on_background_planning_error(self, error: Exception):
+        """
+        Callback appelé en cas d'erreur dans la planification en arrière-plan
+
+        Args:
+            error: Exception levée
+        """
+        self.logger.error(f"Erreur planification en arrière-plan: {error}")
+
+        # Effacer l'indicateur en cas d'erreur
+        if self.display_manager:
+            self.display_manager.hide_planning_indicator()

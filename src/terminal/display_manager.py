@@ -610,3 +610,107 @@ class DisplayManager:
         error_msg = error.get('error', 'Erreur inconnue')
         self.console.error(f"Erreur à l'étape {step_number}")
         self.console.print(f"    [dim]{error_msg}[/dim]")
+
+    # ═══════════════════════════════════════════════════════════════
+    # PLANIFICATION EN ARRIÈRE-PLAN
+    # ═══════════════════════════════════════════════════════════════
+
+    def show_planning_indicator(self):
+        """
+        Affiche un indicateur discret de planification en cours
+        Format minimal: ⚙️ Planning...
+        """
+        self.console.print("[dim]⚙️ Planning...[/dim]", end="")
+
+    def hide_planning_indicator(self):
+        """
+        Efface l'indicateur de planification
+        Utilise un retour chariot pour effacer la ligne
+        """
+        # Effacer la ligne avec des espaces puis retour à la ligne
+        self.console.print("\r" + " " * 20 + "\r", end="")
+
+    def show_plan_ready_notification(self, plan: dict, analysis: dict):
+        """
+        Affiche une notification discrète quand un plan est prêt
+
+        Args:
+            plan: Plan généré
+            analysis: Analyse de la requête
+        """
+        from rich.panel import Panel
+
+        project_type = analysis.get('project_type', 'unknown')
+        step_count = len(plan.get('steps', []))
+
+        notification = Panel(
+            f"[dim]Plan prêt:[/dim] [info]{project_type}[/info]\n"
+            f"[dim]{step_count} étapes préparées[/dim]\n\n"
+            f"[dim]Tapez[/dim] [info]/plan[/info] [dim]pour consulter[/dim]",
+            title="[bold cyan]⚙️ Plan Ready[/bold cyan]",
+            border_style="cyan dim",
+            padding=(0, 2),
+            box=box.ROUNDED
+        )
+
+        self.console.print()
+        self.console.print(notification)
+
+    def show_background_plan(self, plan_data: dict):
+        """
+        Affiche un plan généré en arrière-plan avec formatage similaire au mode agent
+
+        Args:
+            plan_data: Dict contenant 'plan', 'analysis', 'request_id'
+        """
+        plan = plan_data.get('plan', {})
+        analysis = plan_data.get('analysis', {})
+        request_id = plan_data.get('request_id', 'unknown')
+
+        # Afficher l'en-tête
+        project_type = analysis.get('project_type', 'unknown')
+        user_request = plan.get('_metadata', {}).get('user_request', '')
+        planning_time = plan.get('_metadata', {}).get('planning_time', 0)
+
+        self.console.print()
+        self.console.print("[title]PLAN GÉNÉRÉ EN ARRIÈRE-PLAN[/title]")
+        self.console.print()
+        self.console.print(f"[label]Type:[/label] {project_type}")
+        self.console.print(f"[label]Requête:[/label] {user_request}")
+        self.console.print(f"[label]Temps de génération:[/label] {planning_time:.2f}s")
+        self.console.print()
+
+        # Utiliser la table existante pour afficher le plan
+        if hasattr(self.agent, 'planner'):
+            # Utiliser la méthode display_plan du ProjectPlanner
+            plan_display = self.agent.planner.display_plan(plan)
+            self.console.print(plan_display)
+        else:
+            # Fallback: affichage simple
+            steps = plan.get('steps', [])
+            table = create_agent_plan_table(steps)
+            self.console.print(table)
+
+        self.console.print()
+        self.console.print("[dim]ID du plan:[/dim] [dim]{}[/dim]".format(request_id))
+
+    def show_plan_stats(self, stats: dict):
+        """
+        Affiche les statistiques du système de planification en arrière-plan
+
+        Args:
+            stats: Dict avec les statistiques
+        """
+        stats_data = {
+            "Total de requêtes": stats.get('total_requests', 0),
+            "Plans générés": stats.get('plans_generated', 0),
+            "Requêtes simples": stats.get('simple_requests', 0),
+            "Erreurs": stats.get('errors', 0),
+            "Temps moyen de planification": f"{stats.get('avg_planning_time', 0):.2f}s",
+            "Planificateur actif": "Oui" if stats.get('is_running', False) else "Non",
+            "Requêtes en queue": stats.get('queue_size', 0),
+            "Plans disponibles": stats.get('results_available', 0)
+        }
+
+        table = create_stats_table(stats_data, title="Statistiques de Planification en Arrière-plan")
+        self.console.print(table)

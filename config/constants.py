@@ -115,7 +115,7 @@ ERROR_TYPES = {
 SPECIAL_COMMANDS = [
     '/help', '/clear', '/history', '/models', '/info', '/templates',
     '/agent', '/pause', '/resume', '/stop', '/quit',
-    '/cache', '/hardware', '/rollback', '/security', '/corrections'
+    '/cache', '/hardware', '/rollback', '/security', '/corrections', '/plan'
 ]
 
 

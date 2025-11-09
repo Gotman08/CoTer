@@ -51,6 +51,11 @@ class Settings:
         self.agent_pause_between_steps = float(os.getenv("AGENT_PAUSE_STEPS", "0.5"))
         self.agent_auto_confirm_plan = False  # Demander confirmation avant exécution
 
+        # Configuration planification en arrière-plan (mode AUTO)
+        self.background_planning_enabled = os.getenv("BACKGROUND_PLANNING_ENABLED", "true").lower() == "true"
+        self.background_planning_auto_execute = os.getenv("BACKGROUND_PLANNING_AUTO_EXECUTE", "true").lower() == "true"
+        self.background_plan_cache_size = int(os.getenv("BACKGROUND_PLAN_CACHE_SIZE", "5"))
+
         # Configuration génération de code
         self.code_gen_enabled = True  # Activer génération de code
         self.code_gen_backup = True  # Backup avant modification
