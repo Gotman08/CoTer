@@ -12,3 +12,9 @@ simple-term-menu>=1.6.0
 
 # Affichage terminal riche et professionnel (Phase 2: UI/UX)
 rich>=13.7.0
+
+# Shell PTY persistant pour vrai terminal (Phase 3: Terminal Shell)
+pexpect>=4.9.0
+
+# Historique navigable + auto-complétion (Phase 3: Terminal Shell)
+prompt_toolkit>=3.0.0

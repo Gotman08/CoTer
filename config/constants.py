@@ -21,6 +21,13 @@ MAX_AGENT_STEPS = 50
 MAX_AGENT_DURATION_MINUTES = 30
 MAX_RETRY_ATTEMPTS = 3
 
+# Limites pour le mode AUTO itératif
+MAX_AUTO_ITERATIONS = 15  # Limite de sécurité pour éviter les boucles infinies
+
+# Limites de buffer pour sortie commande (protection mémoire)
+MAX_OUTPUT_SIZE_BYTES = 1 * 1024 * 1024  # 1MB max pour stdout/stderr
+OUTPUT_BUFFER_SIZE = 8192  # 8KB buffer pour lecture streaming
+
 
 # ===== TIMEOUTS =====
 OLLAMA_TIMEOUT_SECONDS = 60

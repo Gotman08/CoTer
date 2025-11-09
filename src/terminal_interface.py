@@ -14,9 +14,12 @@ from src.core import ShellEngine, ShellMode, HistoryManager, BuiltinCommands
 from src.utils.command_helpers import CommandResultHandler, handle_command_errors
 from src.terminal.display_manager import DisplayManager
 from src.terminal.tag_display import TagDisplay
+from src.terminal.ai_stream_processor import AIStreamProcessor
 from src.terminal.rich_console import get_console
 from src.terminal import rich_components
+from simple_term_menu import TerminalMenu
 from config import prompts, project_templates, constants
+from config.constants import MAX_AUTO_ITERATIONS
 
 class TerminalInterface:
     """Interface en ligne de commande pour le Terminal IA"""
@@ -59,6 +62,9 @@ class TerminalInterface:
         # Initialiser le gestionnaire de résultats unifié (Refactoring Phase 1.3)
         self.result_handler = CommandResultHandler(self)
 
+        # Initialiser le processeur de streaming IA (Refactoring: élimination duplication)
+        self.stream_processor = None  # Initialisé après parser
+
         # Initialisation des composants
         self.logger.info("Initialisation des composants...")
 
@@ -79,8 +85,17 @@ class TerminalInterface:
             # Parser de commandes
             self.parser = CommandParser(self.ollama, logger)
 
-            # Exécuteur de commandes
-            self.executor = CommandExecutor(settings, logger)
+            # Processeur de streaming IA (maintenant que parser est initialisé)
+            self.stream_processor = AIStreamProcessor(
+                self.console,
+                self.tag_parser,
+                self.tag_display,
+                self.parser
+            )
+
+            # Exécuteur de commandes (avec shell PTY persistant)
+            self.executor = CommandExecutor(settings, logger, use_pty=True)
+            self.logger.info("CommandExecutor initialisé avec shell PTY persistant")
 
             # Validateur de sécurité
             self.security = SecurityValidator(logger)
@@ -229,6 +244,7 @@ class TerminalInterface:
         elif cmd_lower == '/manual':
             # Basculer en mode MANUAL
             if self.shell_engine.switch_to_manual():
+                self.logger.info("Changement de mode: → MANUAL")
                 self.console.print()
                 self.console.success("Mode MANUAL activé")
                 self.console.print(f"[dim]{self.shell_engine.get_mode_description()}[/dim]")
@@ -239,6 +255,7 @@ class TerminalInterface:
         elif cmd_lower == '/auto':
             # Basculer en mode AUTO
             if self.shell_engine.switch_to_auto():
+                self.logger.info("Changement de mode: → AUTO (itératif)")
                 self.console.print()
                 self.console.success("Mode AUTO activé")
                 self.console.print(f"[dim]{self.shell_engine.get_mode_description()}[/dim]")
@@ -246,11 +263,23 @@ class TerminalInterface:
                 self.console.print()
                 self.console.info("Déjà en mode AUTO")
 
+        elif cmd_lower == '/fast':
+            # Basculer en mode FAST
+            if self.shell_engine.switch_to_fast():
+                self.logger.info("Changement de mode: → FAST (one-shot)")
+                self.console.print()
+                self.console.success("Mode FAST activé")
+                self.console.print(f"[dim]{self.shell_engine.get_mode_description()}[/dim]")
+            else:
+                self.console.print()
+                self.console.info("Déjà en mode FAST")
+
         elif cmd_lower == '/status':
             # Afficher le statut du shell
             self.display_manager.show_shell_status()
 
         elif cmd_lower == '/clear':
+            self.logger.info("Effacement de l'historique demandé")
             self.parser.clear_history()
             self.ollama.clear_history()
             self.console.print()
@@ -397,10 +426,16 @@ class TerminalInterface:
                 self._handle_manual_mode(user_input)
                 return
 
-            # MODE AUTO : Parsing IA puis exécution
+            # MODE AUTO : Parsing IA itératif avec boucle
             elif self.shell_engine.is_auto_mode():
                 self.console.print()
                 self._handle_auto_mode(user_input)
+                return
+
+            # MODE FAST : Parsing IA one-shot (une commande et c'est fini)
+            elif self.shell_engine.is_fast_mode():
+                self.console.print()
+                self._handle_fast_mode(user_input)
                 return
 
             # MODE AGENT : Toujours proposer le mode autonome
@@ -436,20 +471,23 @@ class TerminalInterface:
                     )
                     return
 
-            # Exécuter via subprocess (pas builtin)
-            # strict_mode=False pour autoriser pipes, redirections, etc.
+            # Exécuter via shell PTY persistant (VRAI TERMINAL)
+            # Avantages vs subprocess :
+            # - Variables d'environnement persistent (export fonctionne)
+            # - cd natif fonctionne
+            # - Aliases et functions shell fonctionnent
+            # - Session unique (comme bash/zsh)
 
             # Callback pour afficher la sortie en temps réel
             def stream_output(line):
                 """Affiche chaque ligne de sortie en temps réel"""
                 self.console.print(f"[output]{line}[/output]")
 
-            # Exécution avec streaming
+            # Exécution avec shell PTY
             self.console.print()  # Ligne vide avant la sortie
-            result = self.executor.execute_streaming(
+            result = self.executor.execute_pty(
                 user_input,
-                output_callback=stream_output,
-                strict_mode=False
+                output_callback=stream_output
             )
 
             # Traiter le résultat via le handler unifié (display + history + logging)
@@ -476,134 +514,149 @@ class TerminalInterface:
         Returns:
             Dict avec command, explanation, risk_level, parsed_sections
         """
-        self.console.print()  # Ligne vide avant
-
         # Obtenir le générateur de streaming
         stream_gen = self.parser.parse_user_request_stream(user_input)
 
-        # Variables pour tracking des balises
-        accumulated_text = ""
-        current_tag = None
-        tag_content = ""
-        in_tag = False
+        # Déléguer au processeur de streaming (Refactoring: élimination duplication)
+        return self.stream_processor.process_stream(
+            stream_gen,
+            user_input,
+            context_label="STREAMING"
+        )
+
+    def _stream_ai_response_with_history(self, user_input: str, context_history: list) -> dict:
+        """
+        Stream la réponse IA avec historique (pour mode itératif)
+
+        Args:
+            user_input: Demande utilisateur initiale
+            context_history: Historique des étapes précédentes
+
+        Returns:
+            Dict avec command, explanation, risk_level, parsed_sections
+        """
+        self.logger.info(f"[STREAMING WITH HISTORY] Step avec {len(context_history)} étapes précédentes")
+
+        # Obtenir le générateur de streaming avec historique
+        stream_gen = self.parser.parse_with_history(user_input, context_history)
+
+        # Déléguer au processeur de streaming (Refactoring: élimination duplication)
+        return self.stream_processor.process_stream(
+            stream_gen,
+            user_input,
+            context_label="STREAMING WITH HISTORY"
+        )
+
+    def _is_task_completed(self, explanation: str) -> bool:
+        """
+        Détecte si la tâche est complétée basé sur l'explication de l'IA
+
+        Args:
+            explanation: L'explication fournie par l'IA
+
+        Returns:
+            True si la tâche est terminée
+        """
+        if not explanation:
+            return False
+
+        # Chercher les marqueurs de complétion
+        completion_markers = [
+            "✓ Tâche terminée",
+            "✓ tâche terminée",
+            "tâche terminée",
+            "tâche complétée",
+            "objectif atteint",
+            "✗ Impossible de continuer",
+            "impossible de continuer",
+            "pas de solution",
+            "aucune commande appropriée"
+        ]
+
+        explanation_lower = explanation.lower()
+        for marker in completion_markers:
+            if marker.lower() in explanation_lower:
+                return True
+
+        return False
+
+    def _prompt_next_action_with_arrows(self) -> str:
+        """
+        Demande à l'utilisateur ce qu'il veut faire (avec sélection par flèches)
+
+        Returns:
+            "continue", "stop", ou "improve"
+        """
+        options = [
+            "→ Continuer (prochaine étape)",
+            "⏹  Arrêter (terminé)",
+            "✏  Améliorer (préciser)"
+        ]
 
         try:
-            # Consommer le stream token par token
-            for token in stream_gen:
-                accumulated_text += token
+            self.console.print()
+            terminal_menu = TerminalMenu(
+                options,
+                title="Que souhaitez-vous faire ? (↑↓ pour naviguer, Entrée pour valider)",
+                cursor_index=0  # Par défaut sur "Continuer"
+            )
 
-                # Détecter les balises au fur et à mesure
-                # Chercher les patterns [Tag] dans le texte accumulé
-                if '[' in token:
-                    in_tag = True
+            menu_index = terminal_menu.show()
 
-                if in_tag and ']' in token:
-                    # Une balise vient d'être complétée, l'extraire
-                    tag_match = accumulated_text.rfind('[')
-                    if tag_match != -1:
-                        tag_end = accumulated_text.find(']', tag_match)
-                        if tag_end != -1:
-                            # Balise détectée
-                            potential_tag = accumulated_text[tag_match+1:tag_end]
+            if menu_index is None:
+                # Utilisateur a annulé (Ctrl+C)
+                self.console.print()
+                return "stop"
+            elif menu_index == 0:
+                return "continue"
+            elif menu_index == 1:
+                return "stop"
+            elif menu_index == 2:
+                return "improve"
+            else:
+                # Fallback par défaut
+                return "continue"
 
-                            # Si c'est une balise connue, afficher la section précédente
-                            if self.tag_parser.is_known_tag(potential_tag):
-                                # Afficher le contenu précédent si existant
-                                if current_tag and tag_content.strip():
-                                    self.tag_display.display_tag(current_tag, tag_content.strip())
-
-                                # Nouvelle balise détectée
-                                current_tag = potential_tag
-                                tag_content = ""
-                                in_tag = False
-                                continue
-
-                # Accumuler le contenu de la balise courante
-                if current_tag and not in_tag:
-                    tag_content += token
-                elif not current_tag:
-                    # Pas encore de balise, afficher brut
-                    self.console.print(token, end="")
-
-            # Afficher la dernière section si existante
-            if current_tag and tag_content.strip():
-                self.tag_display.display_tag(current_tag, tag_content.strip())
-
-            self.console.print()  # Ligne vide après
-
-            # Récupérer le résultat final du générateur
-            try:
-                result = stream_gen.gi_frame and stream_gen.send(None)
-                if result is None:
-                    # Le générateur n'a pas retourné de valeur, essayer la valeur de retour
-                    result = getattr(stream_gen, 'gi_code', None)
-            except StopIteration as e:
-                result = e.value if hasattr(e, 'value') else None
-
-            # Si pas de résultat, parser manuellement le texte accumulé
-            if result is None:
-                result = self.parser._process_ai_response(accumulated_text, user_input)
-
-            return result
-
+        except KeyboardInterrupt:
+            self.console.print()
+            return "stop"
         except Exception as e:
-            self.logger.error(f"Erreur lors du streaming: {e}", exc_info=True)
-            self.console.error(f"Erreur streaming: {e}")
+            self.logger.error(f"Erreur lors de la sélection: {e}")
+            return "stop"
 
-            # Fallback: parser le texte accumulé
-            if accumulated_text:
-                return self.parser._process_ai_response(accumulated_text, user_input)
-
-            return {
-                'command': None,
-                'explanation': f"Erreur lors du streaming: {e}",
-                'risk_level': 'unknown',
-                'parsed_sections': {}
-            }
-
-    def _handle_auto_mode(self, user_input: str):
+    def _handle_fast_mode(self, user_input: str):
         """
-        Gère les commandes en mode AUTO (avec IA)
+        Gère les commandes en mode FAST (IA one-shot, pas de boucle itérative)
 
         Args:
             user_input: Demande en langage naturel
         """
+        self.logger.info(f"Entrée en mode FAST one-shot - Demande: {user_input[:100]}...")
         try:
-            # Si l'agent est activé, vérifier si c'est une demande complexe
-            if self.agent and self.settings.agent_enabled:
-                # Analyse de la complexité avec spinner
-                with self.console.create_status("Analyse de la complexité...") as status:
-                    analysis = self.agent.planner.analyze_request(user_input)
-
-                if analysis.get('is_complex'):
-                    # Demande complexe détectée, utiliser le mode agent
-                    self.console.print()
-                    self.console.info(f"Projet complexe détecté: {analysis.get('project_type')}")
-                    self.console.info("Activation du mode agent autonome disponible")
-
-                    # Demander si l'utilisateur veut utiliser le mode autonome
-                    # PAS de spinner ici pour ne pas bloquer l'input()
-                    response = input("\nUtiliser le mode agent autonome? (oui/non): ").strip().lower()
-                    if response in ['oui', 'o', 'yes', 'y']:
-                        self.shell_engine.switch_to_agent()
-                        self._handle_autonomous_mode(user_input)
-                        return
-                    else:
-                        self.console.warning("Mode agent annulé, traitement en mode commande simple")
-
             # Parser la demande avec streaming (affichage en temps réel avec balises)
-            self.console.info("Analyse de votre demande...")
-            parsed = self._stream_ai_response_with_tags(user_input)
+            # Utilise SYSTEM_PROMPT_FAST via un prompt système modifié
+            self.console.info("⚡ Mode FAST - Génération d'une commande optimale...")
+
+            # Temporairement changer le prompt système pour mode FAST
+            from config.prompts import SYSTEM_PROMPT_FAST
+            original_prompt = self.parser._get_parsing_system_prompt
+
+            # Override temporaire de la méthode pour utiliser SYSTEM_PROMPT_FAST
+            self.parser._get_parsing_system_prompt = lambda: SYSTEM_PROMPT_FAST
+
+            try:
+                parsed = self._stream_ai_response_with_tags(user_input)
+            finally:
+                # Restaurer le prompt original
+                self.parser._get_parsing_system_prompt = original_prompt
 
             command = parsed.get('command')
             risk_level = parsed.get('risk_level', 'unknown')
             explanation = parsed.get('explanation', '')
 
             if not command:
-                # Pas de commande générée - le message a déjà été affiché via les balises
+                # Pas de commande générée
                 return
-
-            # La commande a déjà été affichée via les balises [Commande]
 
             # Valider la sécurité
             is_valid, security_level, security_reason = self.security.validate_command(command)
@@ -636,26 +689,192 @@ class TerminalInterface:
                 strict_mode=False
             )
 
-            # Traiter le résultat (affichage + historique + logging)
-            # skip_output=True car déjà affiché en temps réel
+            # Traiter le résultat
             self.result_handler.handle_result(
                 result,
                 command,
                 user_input,
-                "auto",
+                "fast",
                 skip_output=True
             )
 
-            # Phase 2: Enregistrer dans l'historique de sécurité
+            # Enregistrer dans l'historique de sécurité
             self.security.record_command_execution(
                 command=command,
                 success=result['success'],
                 risk_level=security_level
             )
 
-            # Ajouter à l'historique du parser (legacy)
+            # Ajouter à l'historique du parser
             self.parser.add_to_history(user_input, command, result.get('output', ''))
 
+            self.logger.info(f"Fin du mode FAST one-shot - Commande: {command}")
+
+        except Exception as e:
+            self.logger.error(f"Erreur mode fast: {e}", exc_info=True)
+            self.console.error(f"Erreur: {e}")
+
+    def _handle_auto_mode(self, user_input: str):
+        """
+        Gère les commandes en mode AUTO (avec IA - MODE ITÉRATIF)
+        Boucle itérative : commande → résultat → IA décide prochaine étape
+
+        Args:
+            user_input: Demande en langage naturel
+        """
+        self.logger.info(f"Entrée en mode AUTO itératif - Demande: {user_input[:100]}...")
+        try:
+            # NOTE: Détection automatique de complexité DÉSACTIVÉE
+            # L'utilisateur peut basculer manuellement en mode AGENT avec /agent
+            # Cela évite les faux positifs et donne plus de contrôle à l'utilisateur
+
+            # if self.agent and self.settings.agent_enabled:
+            #     with self.console.create_status("Analyse de la complexité...") as status:
+            #         analysis = self.agent.planner.analyze_request(user_input)
+            #
+            #     if analysis.get('is_complex'):
+            #         self.console.print()
+            #         self.console.info(f"Projet complexe détecté: {analysis.get('project_type')}")
+            #         self.console.info("Activation du mode agent autonome disponible")
+            #
+            #         response = input("\nUtiliser le mode agent autonome? (oui/non): ").strip().lower()
+            #         if response in ['oui', 'o', 'yes', 'y']:
+            #             self.shell_engine.switch_to_agent()
+            #             self._handle_autonomous_mode(user_input)
+            #             return
+            #         else:
+            #             self.console.warning("Mode agent annulé, traitement en mode itératif")
+
+            # BOUCLE ITÉRATIVE
+            context_history = []  # Historique des commandes et résultats
+            step_number = 0
+            self.logger.info(f"Démarrage de la boucle itérative (max {MAX_AUTO_ITERATIONS} étapes)")
+
+            while step_number < MAX_AUTO_ITERATIONS:
+                step_number += 1
+                self.logger.debug(f"Itération {step_number}/{MAX_AUTO_ITERATIONS}")
+                self.console.print()
+                self.console.info(f"🔄 Étape {step_number}/{MAX_AUTO_ITERATIONS}")
+
+                # Utiliser parse_with_history pour le contexte conversationnel
+                if context_history:
+                    # Avec historique (étapes > 1)
+                    self.logger.debug(f"Génération avec historique ({len(context_history)} étapes précédentes)")
+                    parsed = self._stream_ai_response_with_history(user_input, context_history)
+                else:
+                    # Première étape, pas d'historique
+                    self.logger.debug("Première génération (sans historique)")
+                    self.console.info("Analyse de votre demande...")
+                    parsed = self._stream_ai_response_with_tags(user_input)
+
+                command = parsed.get('command')
+                risk_level = parsed.get('risk_level', 'unknown')
+                explanation = parsed.get('explanation', '')
+
+                self.logger.info(f"Commande générée: {command}")
+                self.logger.debug(f"Risk level: {risk_level}, Explication: {explanation[:100]}...")
+
+                if not command:
+                    # Pas de commande générée
+                    self.logger.warning("Aucune commande générée par l'IA")
+                    self.console.warning("Aucune commande générée")
+                    break
+
+                # Valider la sécurité
+                is_valid, security_level, security_reason = self.security.validate_command(command)
+
+                if not is_valid:
+                    self.console.print()
+                    self.console.error("Commande bloquée")
+                    self.console.print(f"   Raison: {security_reason}")
+                    self.logger.warning(f"Commande bloquée: {command} - {security_reason}")
+                    break
+
+                # Demander confirmation si nécessaire
+                if security_level == 'high' or risk_level == 'high':
+                    if not self._confirm_command(command, security_level, security_reason):
+                        self.console.error("Commande annulée")
+                        break
+
+                # Exécuter la commande
+                self.console.info("Exécution...")
+                self.console.print()
+
+                def stream_output(line):
+                    self.console.print(f"[output]{line}[/output]")
+
+                result = self.executor.execute_streaming(
+                    command,
+                    output_callback=stream_output,
+                    strict_mode=False
+                )
+
+                # Enregistrer dans l'historique
+                self.result_handler.handle_result(
+                    result,
+                    command,
+                    user_input,
+                    "auto",
+                    skip_output=True
+                )
+
+                self.security.record_command_execution(
+                    command=command,
+                    success=result['success'],
+                    risk_level=security_level
+                )
+
+                self.parser.add_to_history(user_input, command, result.get('output', ''))
+
+                # Ajouter au contexte itératif
+                context_history.append({
+                    'command': command,
+                    'output': result.get('output', ''),
+                    'success': result['success']
+                })
+                self.logger.debug(f"Contexte mis à jour: {len(context_history)} étapes au total")
+
+                # Détecter si la tâche est complétée
+                is_completed = self._is_task_completed(explanation)
+
+                if is_completed:
+                    self.logger.info("Tâche détectée comme complétée par l'IA")
+                    self.console.print()
+                    self.console.success("✓ Tâche complétée!")
+                    break
+
+                # Demander à l'utilisateur s'il veut continuer
+                user_choice = self._prompt_next_action_with_arrows()
+                self.logger.info(f"Choix utilisateur: {user_choice}")
+
+                if user_choice == "stop":
+                    self.logger.info("Arrêt de la boucle itérative demandé par l'utilisateur")
+                    self.console.info("Arrêt demandé par l'utilisateur")
+                    break
+                elif user_choice == "improve":
+                    # Demander des précisions supplémentaires
+                    improvement = input("\n💬 Que voulez-vous préciser/améliorer ? ").strip()
+                    if improvement:
+                        self.logger.info(f"Précision utilisateur ajoutée: {improvement[:100]}...")
+                        user_input = f"{user_input}\n\nPrécision: {improvement}"
+                        self.console.success("Précision prise en compte")
+                    continue
+                elif user_choice == "continue":
+                    # Continuer l'itération
+                    self.logger.debug("Utilisateur a choisi de continuer")
+                    continue
+
+            # Fin de la boucle
+            if step_number >= MAX_AUTO_ITERATIONS:
+                self.logger.warning(f"Limite de {MAX_AUTO_ITERATIONS} itérations atteinte")
+                self.console.warning(f"⚠️  Limite de {MAX_AUTO_ITERATIONS} itérations atteinte")
+
+            self.logger.info(f"Fin du mode AUTO itératif - {step_number} étapes exécutées")
+
+        except KeyboardInterrupt:
+            self.logger.info("Interruption par l'utilisateur (Ctrl+C) en mode AUTO")
+            self.console.print()
+            self.console.warning("Interruption par l'utilisateur (Ctrl+C)")
         except Exception as e:
             self.logger.error(f"Erreur mode auto: {e}", exc_info=True)
             self.console.error(f"Erreur: {e}")

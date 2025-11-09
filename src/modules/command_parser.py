@@ -6,6 +6,7 @@ from typing import Dict, Optional, List
 from src.utils.command_helpers import SafeLogger
 from src.utils.tag_parser import TagParser
 from src.security import RiskAssessor
+from config.prompts import SYSTEM_PROMPT_MAIN
 
 class CommandParser:
     """Parse les demandes utilisateur et génère des commandes shell appropriées"""
@@ -87,8 +88,8 @@ Analyse cette demande et génère la commande appropriée."""
 Analyse cette demande et génère la commande appropriée."""
 
         try:
-            # Mode streaming: retourner un générateur
-            return self._stream_parse(prompt, system_prompt, user_input)
+            # Mode streaming: yield depuis le générateur au lieu de le retourner
+            yield from self._stream_parse(prompt, system_prompt, user_input)
 
         except Exception as e:
             self.logger.error(f"Erreur lors du streaming: {e}")
@@ -99,6 +100,93 @@ Analyse cette demande et génère la commande appropriée."""
                 'risk_level': 'unknown',
                 'parsed_sections': {}
             }
+
+    def parse_with_history(self, user_input: str, context_history: List[Dict]):
+        """
+        Parse la demande utilisateur en mode streaming AVEC historique (mode itératif)
+
+        Args:
+            user_input: La demande de l'utilisateur en langage naturel
+            context_history: Historique des commandes et résultats précédents
+                Format: [{'command': str, 'output': str, 'success': bool}, ...]
+
+        Yields:
+            Tokens de la réponse IA
+
+        Returns:
+            Dict avec 'command', 'explanation', 'risk_level', 'parsed_sections'
+        """
+        self.logger.info(f"Parse avec historique - {len(context_history)} étapes précédentes")
+
+        # Vérifier si c'est une commande spéciale
+        if user_input.startswith('/'):
+            yield from []
+            return self._handle_special_command(user_input)
+
+        # Utiliser l'IA pour parser la demande avec contexte
+        system_prompt = self._get_parsing_system_prompt()
+
+        # Formater le contexte de l'historique
+        context_text = self._format_history_context(context_history)
+        self.logger.debug(f"Contexte formaté: {len(context_text)} caractères")
+
+        # Construire le prompt avec le contexte
+        prompt = f"""Demande utilisateur initiale: "{user_input}"
+
+{context_text}
+
+Basé sur l'historique ci-dessus, génère la PROCHAINE commande logique pour continuer la tâche.
+Si la tâche est complétée, indique "✓ Tâche terminée" dans la description.
+Si tu ne peux pas continuer, indique "✗ Impossible de continuer" dans la description."""
+
+        try:
+            # Mode streaming avec contexte
+            self.logger.debug("Lancement du streaming avec contexte historique")
+            yield from self._stream_parse(prompt, system_prompt, user_input)
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors du streaming avec historique: {e}")
+            yield from []
+            return {
+                'command': None,
+                'explanation': f"Erreur lors du streaming: {e}",
+                'risk_level': 'unknown',
+                'parsed_sections': {}
+            }
+
+    def _format_history_context(self, context_history: List[Dict]) -> str:
+        """
+        Formate l'historique des commandes pour le prompt IA
+
+        Args:
+            context_history: Liste des étapes précédentes
+
+        Returns:
+            String formaté pour inclusion dans le prompt
+        """
+        if not context_history:
+            return "Historique: Aucune commande exécutée encore."
+
+        self.logger.debug(f"Formatage de {len(context_history)} étapes d'historique")
+
+        lines = ["Historique des étapes précédentes:"]
+        for i, step in enumerate(context_history, 1):
+            command = step.get('command', 'N/A')
+            output = step.get('output', '')
+            success = step.get('success', False)
+
+            # Limiter la taille de l'output pour ne pas surcharger le prompt
+            output_preview = output[:300] + "..." if len(output) > 300 else output
+
+            status = "✓ Succès" if success else "✗ Échec"
+            lines.append(f"\nÉtape {i}: {status}")
+            lines.append(f"Commande: {command}")
+            if output_preview:
+                lines.append(f"Résultat: {output_preview}")
+
+        self.logger.debug(f"Historique formaté avec succès ({len(lines)} lignes)")
+
+        return "\n".join(lines)
 
     def _stream_parse(self, prompt: str, system_prompt: str, user_input: str):
         """
@@ -144,12 +232,7 @@ Analyse cette demande et génère la commande appropriée."""
 
     def _get_parsing_system_prompt(self) -> str:
         """Retourne le prompt système pour le parsing"""
-        return """Tu es un assistant spécialisé dans la conversion de demandes en langage naturel vers des commandes shell Linux.
-Tu dois UNIQUEMENT retourner la commande shell, sans explication ni formatage markdown.
-Tu connais parfaitement bash, les commandes Linux standards et les outils système.
-Privilégie les commandes sûres et simples.
-Pour les opérations dangereuses (suppression, modification système), préfixe par [DANGER].
-Si la demande n'est pas une action système, préfixe par [NO_COMMAND]."""
+        return SYSTEM_PROMPT_MAIN
 
     def _process_ai_response(self, response: str, original_request: str) -> Dict[str, any]:
         """

@@ -8,6 +8,8 @@ import sys
 import argparse
 import multiprocessing
 import requests
+from datetime import datetime
+from pathlib import Path
 from typing import List, Tuple, Optional
 from simple_term_menu import TerminalMenu
 from src.terminal_interface import TerminalInterface
@@ -15,6 +17,7 @@ from src.terminal.rich_console import get_console
 from src.terminal import rich_components
 from src.utils.logger import setup_logger
 from src.utils import HardwareOptimizer, CacheManager, OllamaManager, UserConfigManager
+from src.utils.text_processing import format_bytes
 from config.settings import Settings
 from config import CacheConfig, constants
 
@@ -60,21 +63,9 @@ def get_available_models(host: str, timeout: int = 5) -> List[dict]:
         return []
 
 
-def format_model_size(size_bytes: int) -> str:
-    """
-    Formate la taille d'un modèle en unités lisibles
-
-    Args:
-        size_bytes: Taille en bytes
-
-    Returns:
-        Taille formatée (ex: "4.1 GB")
-    """
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f} PB"
+# format_model_size est maintenant défini dans src.utils.text_processing
+# Alias pour compatibilité
+format_model_size = format_bytes
 
 
 def select_ollama_model_interactive(
@@ -222,9 +213,16 @@ def main():
 
     console = get_console()
 
-    # Configuration du logger
-    logger = setup_logger(debug=args.debug)
+    # Configuration du logger avec fichier de log
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / f"terminal_ia_{datetime.now().strftime('%Y%m%d')}.log"
+
+    logger = setup_logger(debug=args.debug, log_file=str(log_file))
+    logger.info("="*80)
     logger.info("Démarrage du Terminal IA...")
+    logger.info(f"Fichier de log: {log_file}")
+    logger.info(f"Mode debug: {args.debug}")
 
     # Phase 1: Optimisation hardware
     logger.info("Détection et optimisation du hardware...")
@@ -304,19 +302,26 @@ def main():
 
     try:
         # Initialisation de l'interface terminal
+        logger.info("Initialisation de l'interface terminal...")
         terminal = TerminalInterface(
             settings,
             logger,
             cache_manager=cache_manager,
             user_config=user_config
         )
+        logger.info("Lancement de la boucle principale...")
         terminal.run()
+        logger.info("Fin de la session Terminal IA")
+        logger.info("="*80)
     except KeyboardInterrupt:
         console.print()
         console.info("Arrêt du Terminal IA...")
+        logger.info("Arrêt par l'utilisateur (Ctrl+C)")
+        logger.info("="*80)
         sys.exit(0)
     except Exception as e:
         logger.error(f"Erreur fatale: {e}", exc_info=True)
+        logger.error("="*80)
         sys.exit(1)
 
 if __name__ == "__main__":

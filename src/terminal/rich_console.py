@@ -15,6 +15,14 @@ from rich.markdown import Markdown
 from rich.text import Text
 from rich import box
 
+# Import optionnel du PromptManager (pour historique navigable + auto-complétion)
+try:
+    from src.terminal.prompt_manager import PromptManager
+    PROMPT_TOOLKIT_AVAILABLE = True
+except ImportError:
+    PromptManager = None
+    PROMPT_TOOLKIT_AVAILABLE = False
+
 
 # Thème cohérent et professionnel pour CoTer
 COTER_THEME = Theme({
@@ -33,6 +41,7 @@ COTER_THEME = Theme({
     # Modes
     "mode.manual": "yellow",
     "mode.auto": "green",
+    "mode.fast": "bright_yellow",
     "mode.agent": "blue",
 
     # Sections
@@ -59,11 +68,21 @@ class RichConsoleManager:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, use_prompt_toolkit: bool = True):
         if self._initialized:
             return
 
         self.console = Console(theme=COTER_THEME, highlight=False)
+
+        # PromptManager pour historique navigable + auto-complétion
+        self.prompt_manager: Optional[PromptManager] = None
+        if use_prompt_toolkit and PROMPT_TOOLKIT_AVAILABLE:
+            try:
+                self.prompt_manager = PromptManager()
+            except Exception as e:
+                # Fallback sur input() basique si erreur
+                self.prompt_manager = None
+
         self._initialized = True
 
     # ═══════════════════════════════════════════════════════════════
@@ -143,6 +162,7 @@ class RichConsoleManager:
         commands_text.append("Commandes: ", style="label")
         commands_text.append("/manual ", style="mode.manual")
         commands_text.append("/auto ", style="mode.auto")
+        commands_text.append("/fast ", style="mode.fast")
         commands_text.append("/agent ", style="mode.agent")
         commands_text.append("/help /quit", style="dim")
 
@@ -198,6 +218,7 @@ class RichConsoleManager:
         mode_styles = {
             "MANUAL": ("⌨", "mode.manual"),
             "AUTO": ("◉", "mode.auto"),
+            "FAST": ("⚡", "mode.fast"),
             "AGENT": ("●", "mode.agent")
         }
 
@@ -215,7 +236,33 @@ class RichConsoleManager:
     def input(self, prompt_text: Text) -> str:
         """
         Demande une saisie utilisateur avec un prompt Rich.
+
+        Si PromptManager est disponible, utilise prompt_toolkit pour:
+        - Historique navigable (↑↓)
+        - Recherche d'historique (Ctrl+R)
+        - Auto-complétion (Tab)
+        - Auto-suggestions
+
+        Sinon, fallback sur input() basique.
         """
+        # Convertir Text en string pour prompt_toolkit
+        if isinstance(prompt_text, Text):
+            prompt_str = prompt_text.plain
+        else:
+            prompt_str = str(prompt_text)
+
+        # Utiliser PromptManager si disponible
+        if self.prompt_manager:
+            try:
+                return self.prompt_manager.prompt(prompt_str)
+            except (EOFError, KeyboardInterrupt):
+                # Ctrl+D ou Ctrl+C - rethrow pour gestion upstream
+                raise
+            except Exception:
+                # Fallback sur input() basique en cas d'erreur
+                pass
+
+        # Fallback : input() basique
         self.console.print()
         self.console.print(prompt_text, end="")
         return input()

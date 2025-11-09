@@ -15,11 +15,13 @@ class ShellMode(Enum):
     Modes d'opération du shell CoTer
 
     MANUAL: Mode shell direct - exécute les commandes sans intervention IA
-    AUTO: Mode IA activé - parse le langage naturel via Ollama
+    AUTO: Mode IA activé - parse le langage naturel via Ollama (ITÉRATIF par défaut)
+    FAST: Mode IA one-shot - génère UNE commande optimale et termine
     AGENT: Mode projet autonome - planification multi-étapes avec l'agent
     """
     MANUAL = "manual"
     AUTO = "auto"
+    FAST = "fast"
     AGENT = "agent"
 
     def __str__(self) -> str:
@@ -99,6 +101,10 @@ class ShellEngine:
         """Raccourci pour basculer en mode AUTO"""
         return self.switch_mode(ShellMode.AUTO)
 
+    def switch_to_fast(self) -> bool:
+        """Raccourci pour basculer en mode FAST"""
+        return self.switch_mode(ShellMode.FAST)
+
     def switch_to_agent(self) -> bool:
         """Raccourci pour basculer en mode AGENT"""
         return self.switch_mode(ShellMode.AGENT)
@@ -154,6 +160,10 @@ class ShellEngine:
         """Vérifie si on est en mode AUTO"""
         return self._current_mode == ShellMode.AUTO
 
+    def is_fast_mode(self) -> bool:
+        """Vérifie si on est en mode FAST"""
+        return self._current_mode == ShellMode.FAST
+
     def is_agent_mode(self) -> bool:
         """Vérifie si on est en mode AGENT"""
         return self._current_mode == ShellMode.AGENT
@@ -168,6 +178,7 @@ class ShellEngine:
         symbols = {
             ShellMode.MANUAL: "⌨️",   # Clavier pour mode manuel
             ShellMode.AUTO: "🤖",     # Robot pour mode IA
+            ShellMode.FAST: "⚡",     # Éclair pour mode rapide
             ShellMode.AGENT: "🏗️"     # Construction pour mode projet
         }
         return symbols[self._current_mode]
@@ -181,7 +192,8 @@ class ShellEngine:
         """
         descriptions = {
             ShellMode.MANUAL: "Mode Shell Direct - Commandes exécutées sans IA",
-            ShellMode.AUTO: "Mode IA Activé - Langage naturel via Ollama",
+            ShellMode.AUTO: "Mode IA Activé - Langage naturel via Ollama (Itératif)",
+            ShellMode.FAST: "Mode IA Rapide - Une commande optimale et c'est fini",
             ShellMode.AGENT: "Mode Projet Autonome - Planification multi-étapes"
         }
         return descriptions[self._current_mode]

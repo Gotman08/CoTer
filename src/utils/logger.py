@@ -1,6 +1,7 @@
 """Système de logging pour le Terminal IA"""
 
 import logging
+import os
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -36,7 +37,12 @@ def setup_logger(name: str = "TerminalIA", debug: bool = False, log_file: str = 
     )
 
     # Handler Rich pour la console (sobre et professionnel)
-    console_level = logging.DEBUG if debug else logging.WARNING
+    # Supporter variable d'environnement COTER_DEBUG pour override
+    debug_env = os.getenv("COTER_DEBUG", "false").lower() == "true"
+    is_debug = debug or debug_env
+
+    # Niveau console: DEBUG en mode debug, INFO par défaut (au lieu de WARNING)
+    console_level = logging.DEBUG if is_debug else logging.INFO
     console_handler = RichHandler(
         level=console_level,
         console=None,  # Utilise la console par défaut
@@ -44,7 +50,7 @@ def setup_logger(name: str = "TerminalIA", debug: bool = False, log_file: str = 
         show_path=False,  # Pas de chemin de fichier
         markup=True,  # Support du markup Rich
         rich_tracebacks=True,  # Tracebacks colorés en cas d'erreur
-        tracebacks_show_locals=debug  # Variables locales uniquement en debug
+        tracebacks_show_locals=is_debug  # Variables locales uniquement en debug
     )
     logger.addHandler(console_handler)
 

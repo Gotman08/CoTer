@@ -3,19 +3,21 @@
 import subprocess
 import os
 import shlex
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Optional, Tuple, Any, Callable
 
 from src.utils.command_helpers import create_success_result, create_error_result, SafeLogger
 from src.security import RiskAssessor
+from src.core.pty_shell import PersistentShell
+from config.constants import MAX_OUTPUT_SIZE_BYTES, OUTPUT_BUFFER_SIZE
 
 class CommandExecutor:
     """Exécute des commandes shell de manière sécurisée"""
 
-    # Limites de buffer pour sortie commande (CSAPP Ch.10)
-    MAX_OUTPUT_SIZE_BYTES = 1 * 1024 * 1024  # 1MB max pour stdout/stderr
-    OUTPUT_BUFFER_SIZE = 8192  # 8KB buffer pour lecture streaming
+    # Limites de buffer pour sortie commande (définies dans config/constants.py)
+    MAX_OUTPUT_SIZE_BYTES = MAX_OUTPUT_SIZE_BYTES
+    OUTPUT_BUFFER_SIZE = OUTPUT_BUFFER_SIZE
 
-    def __init__(self, settings, logger=None, max_output_size: Optional[int] = None):
+    def __init__(self, settings, logger=None, max_output_size: Optional[int] = None, use_pty: bool = False):
         """
         Initialise l'exécuteur de commandes
 
@@ -23,15 +25,30 @@ class CommandExecutor:
             settings: Configuration de l'application
             logger: Logger pour les messages
             max_output_size: Taille max de sortie (None = utiliser MAX_OUTPUT_SIZE_BYTES)
+            use_pty: Si True, utilise un shell PTY persistant (vrai terminal). Si False, subprocess one-shot
         """
         self.settings = settings
         self.logger = SafeLogger(logger)
         self.risk_assessor = RiskAssessor()
         self.current_directory = os.getcwd()
         self.max_output_size = max_output_size or self.MAX_OUTPUT_SIZE_BYTES
+        self.use_pty = use_pty
+
+        # Shell PTY persistant (optionnel)
+        self.pty_shell: Optional[PersistentShell] = None
+        if use_pty:
+            try:
+                self.pty_shell = PersistentShell()
+                if self.logger:
+                    self.logger.info(f"Shell PTY activé (PID: {self.pty_shell.shell.pid})")
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Erreur lors de l'initialisation du PTY: {e}")
+                self.pty_shell = None
+                self.use_pty = False
 
         if self.logger:
-            self.logger.debug(f"Buffer limit: max_output={self.max_output_size / 1024:.0f}KB")
+            self.logger.debug(f"Buffer limit: max_output={self.max_output_size / 1024:.0f}KB, PTY: {self.use_pty}")
 
     def execute(self, command: str, timeout: int = 30, strict_mode: bool = True) -> Dict[str, Any]:
         """
@@ -71,14 +88,26 @@ class CommandExecutor:
                 shell=True,
                 cwd=self.current_directory,
                 capture_output=True,
-                text=True,
+                text=False,  # Mode binaire - décodage manuel pour gérer les fichiers binaires
                 timeout=timeout,
                 env=os.environ.copy()
             )
 
             success = result.returncode == 0
-            output = result.stdout.strip()
-            error = result.stderr.strip()
+
+            # Décoder stdout avec fallback pour fichiers binaires
+            try:
+                output = result.stdout.decode('utf-8').strip()
+            except UnicodeDecodeError:
+                self.logger.warning("Sortie binaire détectée dans stdout - utilisation du fallback Latin-1")
+                output = result.stdout.decode('latin-1', errors='replace').strip()
+
+            # Décoder stderr avec fallback pour fichiers binaires
+            try:
+                error = result.stderr.decode('utf-8').strip()
+            except UnicodeDecodeError:
+                self.logger.warning("Sortie binaire détectée dans stderr - utilisation du fallback Latin-1")
+                error = result.stderr.decode('latin-1', errors='replace').strip()
 
             # Vérifier et limiter la taille de la sortie (protection mémoire CSAPP Ch.10)
             output_size = len(output.encode('utf-8'))
@@ -122,6 +151,53 @@ class CommandExecutor:
             self.logger.error(error_msg, exc_info=True)
             return create_error_result(error_msg)
 
+    def execute_pty(self, command: str, output_callback: Optional[Callable] = None) -> Dict[str, Any]:
+        """
+        Exécute une commande dans le shell PTY persistant
+
+        AVANTAGES vs subprocess:
+        - Variables d'environnement persistent entre commandes
+        - cd fonctionne nativement
+        - Aliases et functions shell fonctionnent
+        - Session shell unique (vrai terminal)
+
+        Args:
+            command: La commande à exécuter
+            output_callback: Fonction appelée avec l'output (callback(line: str))
+
+        Returns:
+            Dict avec 'success', 'output', 'error', 'return_code'
+        """
+        if not self.pty_shell or not self.pty_shell.is_alive():
+            self.logger.warning("PTY shell non disponible, fallback sur subprocess")
+            return self.execute(command, strict_mode=False)
+
+        try:
+            self.logger.debug(f"Exécution PTY: {command[:100]}")
+
+            # Exécuter dans le shell PTY persistant
+            result = self.pty_shell.execute(command)
+
+            # Appeler le callback avec l'output si fourni
+            if output_callback and result.get('output'):
+                for line in result['output'].split('\n'):
+                    if line.strip():
+                        output_callback(line)
+
+            # Mettre à jour le current_directory depuis le PTY
+            self.current_directory = self.pty_shell.get_current_directory()
+
+            # Formater le résultat
+            if result['success']:
+                return create_success_result(result['output'], result['exit_code'])
+            else:
+                return create_error_result(result['output'], result['exit_code'])
+
+        except Exception as e:
+            error_msg = f"Erreur lors de l'exécution PTY: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            return create_error_result(error_msg)
+
     def execute_streaming(self, command: str, output_callback=None, timeout: int = 30, strict_mode: bool = True) -> Dict[str, Any]:
         """
         Exécute une commande shell avec affichage en temps réel (streaming)
@@ -157,7 +233,7 @@ class CommandExecutor:
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # Combiner stderr avec stdout
-                text=True,
+                text=False,  # Mode binaire - décodage manuel pour gérer les fichiers binaires
                 bufsize=1,  # Line buffered - important pour le streaming
                 cwd=self.current_directory,
                 env=os.environ.copy()
@@ -166,13 +242,14 @@ class CommandExecutor:
             # Lire la sortie ligne par ligne EN TEMPS RÉEL
             output_lines = []
             total_size = 0
+            binary_detected = False
 
-            for line in iter(process.stdout.readline, ''):
-                if not line:
+            for line_bytes in iter(process.stdout.readline, b''):
+                if not line_bytes:
                     break
 
                 # Vérifier la limite de taille
-                line_size = len(line.encode('utf-8'))
+                line_size = len(line_bytes)
                 if total_size + line_size > self.max_output_size:
                     truncation_msg = f"\n[... Sortie tronquée à {self.max_output_size / 1024:.0f}KB ...]\n"
                     output_lines.append(truncation_msg)
@@ -180,6 +257,22 @@ class CommandExecutor:
                         output_callback(truncation_msg.rstrip())
                     self.logger.warning(f"Sortie tronquée: {total_size / 1024:.1f}KB > {self.max_output_size / 1024:.0f}KB")
                     break
+
+                # Tenter de décoder avec gestion d'erreur pour fichiers binaires
+                try:
+                    line = line_bytes.decode('utf-8')
+                except UnicodeDecodeError:
+                    # Fichier binaire détecté - afficher un avertissement une seule fois
+                    if not binary_detected:
+                        binary_detected = True
+                        warning_msg = "[AVERTISSEMENT: Sortie binaire détectée - affichage limité]\n"
+                        output_lines.append(warning_msg)
+                        if output_callback:
+                            output_callback(warning_msg.rstrip())
+                        self.logger.warning("Sortie binaire détectée - utilisation du fallback Latin-1")
+
+                    # Fallback sur Latin-1 (accepte tous les bytes 0x00-0xFF)
+                    line = line_bytes.decode('latin-1', errors='replace')
 
                 output_lines.append(line)
                 total_size += line_size
