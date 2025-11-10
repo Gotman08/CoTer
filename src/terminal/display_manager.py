@@ -76,8 +76,6 @@ class DisplayManager:
             result: Résultat de l'exécution
         """
         if result['success']:
-            self.console.success("Commande exécutée avec succès")
-
             if result.get('output'):
                 output = self.security.sanitize_output(result['output'])
                 panel = create_result_panel(output, title="Sortie", success=True)

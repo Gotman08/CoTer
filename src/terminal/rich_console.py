@@ -3,6 +3,7 @@ Console Rich unifiée pour un affichage professionnel et sobre.
 Remplace tous les print() et emojis par des composants Rich structurés.
 """
 
+import logging
 from typing import Optional, Dict, Any, List
 from rich.console import Console
 from rich.theme import Theme
@@ -15,13 +16,21 @@ from rich.markdown import Markdown
 from rich.text import Text
 from rich import box
 
+logger = logging.getLogger(__name__)
+
 # Import optionnel du PromptManager (pour historique navigable + auto-complétion)
 try:
     from src.terminal.prompt_manager import PromptManager
     PROMPT_TOOLKIT_AVAILABLE = True
-except ImportError:
+    logger.info("PromptManager importé avec succès - Tab completion disponible")
+except ImportError as e:
     PromptManager = None
     PROMPT_TOOLKIT_AVAILABLE = False
+    logger.warning(f"PromptManager non disponible (prompt_toolkit manquant?) - Tab completion désactivée: {e}")
+except Exception as e:
+    PromptManager = None
+    PROMPT_TOOLKIT_AVAILABLE = False
+    logger.error(f"Erreur lors de l'import de PromptManager - Tab completion désactivée: {e}", exc_info=True)
 
 
 # Thème cohérent et professionnel pour CoTer
@@ -74,14 +83,24 @@ class RichConsoleManager:
 
         self.console = Console(theme=COTER_THEME, highlight=False)
 
+        # Flag pour afficher le warning de fallback une seule fois
+        self._fallback_warning_shown = False
+
         # PromptManager pour historique navigable + auto-complétion
         self.prompt_manager: Optional[PromptManager] = None
         if use_prompt_toolkit and PROMPT_TOOLKIT_AVAILABLE:
             try:
                 self.prompt_manager = PromptManager()
+                logger.info("PromptManager initialisé - Auto-complétion Tab active")
             except Exception as e:
                 # Fallback sur input() basique si erreur
                 self.prompt_manager = None
+                logger.error(f"Échec d'initialisation PromptManager - Fallback vers input() basique: {e}", exc_info=True)
+        else:
+            if not use_prompt_toolkit:
+                logger.info("PromptManager désactivé par configuration")
+            elif not PROMPT_TOOLKIT_AVAILABLE:
+                logger.warning("PromptManager non disponible - Tab completion désactivée")
 
         self._initialized = True
 
@@ -258,11 +277,19 @@ class RichConsoleManager:
             except (EOFError, KeyboardInterrupt):
                 # Ctrl+D ou Ctrl+C - rethrow pour gestion upstream
                 raise
-            except Exception:
+            except Exception as e:
                 # Fallback sur input() basique en cas d'erreur
-                pass
+                logger.error(f"Erreur PromptManager, fallback vers input() basique: {e}", exc_info=True)
+                if not self._fallback_warning_shown:
+                    self.console.print("[warning]⚠[/warning] [dim]Tab completion désactivée (erreur PromptManager)[/dim]")
+                    self._fallback_warning_shown = True
 
         # Fallback : input() basique
+        if not self.prompt_manager and not self._fallback_warning_shown:
+            # Avertir l'utilisateur une seule fois que Tab completion n'est pas disponible
+            logger.warning("Utilisation de input() basique - Tab completion non disponible")
+            self._fallback_warning_shown = True
+
         self.console.print()
         self.console.print(prompt_text, end="")
         return input()
@@ -280,8 +307,6 @@ class RichConsoleManager:
         error = result.get('error', '')
 
         if success:
-            self.success("Commande exécutée avec succès")
-
             if output:
                 # Affiche la sortie dans un panel
                 self.console.print()

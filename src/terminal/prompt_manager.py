@@ -62,12 +62,15 @@ class CoTermCompleter(Completer):
         """
         text = document.text_before_cursor
 
-        # Si on commence par '/', compléter les commandes CoTer
+        # Si on commence par '/', proposer d'abord les commandes CoTer
         if text.startswith('/'):
+            # Priorité aux commandes slash
             for completion in self.slash_completer.get_completions(document, complete_event):
                 yield completion
-        else:
-            # Sinon, compléter les fichiers/dossiers
+
+        # Toujours proposer aussi les fichiers/dossiers (sauf si on est en pleine commande slash)
+        # Cela permet de compléter les arguments de commandes
+        if not text.startswith('/') or ' ' in text:
             for completion in self.path_completer.get_completions(document, complete_event):
                 yield completion
 
@@ -99,6 +102,9 @@ class PromptManager:
         self.history_file = history_file
         self.enable_suggestions = enable_suggestions
 
+        # Créer les key bindings personnalisés
+        key_bindings = self._create_key_bindings()
+
         # Créer la session prompt_toolkit
         self.session = PromptSession(
             history=FileHistory(self.history_file),
@@ -107,10 +113,38 @@ class PromptManager:
             complete_while_typing=False,  # Compléter seulement sur Tab
             enable_history_search=True,  # Ctrl+R pour recherche
             mouse_support=False,  # Pas de support souris (terminal)
+            key_bindings=key_bindings,  # Bindings personnalisés
             style=self._get_style()
         )
 
-        logger.info(f"PromptManager initialisé - Historique: {history_file}")
+        logger.info(f"PromptManager initialisé - Historique: {history_file}, Tab completion activée")
+
+    def _create_key_bindings(self) -> KeyBindings:
+        """
+        Crée les key bindings personnalisés pour le prompt
+
+        Returns:
+            KeyBindings configurés
+        """
+        kb = KeyBindings()
+
+        # Tab: Déclencher la complétion
+        @kb.add('tab')
+        def _(event):
+            """
+            Gère l'appui sur Tab pour l'auto-complétion
+            """
+            buffer = event.current_buffer
+
+            # Si des complétions sont disponibles, passer à la suivante
+            if buffer.complete_state:
+                buffer.complete_next()
+            else:
+                # Sinon, démarrer la complétion
+                buffer.start_completion()
+
+        logger.debug("Key bindings configurés: Tab pour auto-complétion")
+        return kb
 
     def _get_style(self) -> Style:
         """

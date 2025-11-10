@@ -178,7 +178,6 @@ class CommandResultHandler:
         console = get_console()
 
         if result['success']:
-            console.success("Commande exécutée avec succès")
             # N'afficher l'output QUE si pas déjà streamé
             if not skip_output and result.get('output'):
                 panel = create_result_panel(result['output'], title="Sortie", success=True)
