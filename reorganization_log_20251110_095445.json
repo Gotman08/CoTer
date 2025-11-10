@@ -1,0 +1,464 @@
+[
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "DÉBUT DE LA RÉORGANISATION DU PROJET COTER",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "WARNING",
+    "message": "⚠️  MODE DRY-RUN: Aucune modification ne sera effectuée",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "============================================================",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "PHASE 1: NETTOYAGE ET RENOMMAGES",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "============================================================",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Supprimé: src/modules/autonomous_agent.py.backup",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "WARNING",
+    "message": "⚠️  Plusieurs venv détectés: ['.venv', 'venv']",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "WARNING",
+    "message": "   Veuillez supprimer manuellement celui qui n'est pas utilisé",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "\n--- Renommage des prompt_manager.py ---",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Renommé: src/core/prompt_manager.py → src/core/shell_prompt_manager.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Renommé: src/terminal/prompt_manager.py → src/terminal/terminal_prompt_manager.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "\n============================================================",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "PHASE 2.1: RESTRUCTURATION DE src/modules/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "============================================================",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/modules/agent/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: autonomous_agent.py → agent/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: agent_orchestrator.py → agent/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: agent_facades.py → agent/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: step_executor.py → agent/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/modules/planning/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: project_planner.py → planning/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: background_planner.py → planning/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: plan_storage.py → planning/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/modules/execution/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: command_executor.py → execution/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: command_parser.py → execution/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: code_editor.py → execution/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/modules/tools/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: git_manager.py → tools/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: ollama_client.py → tools/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "\n============================================================",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "PHASE 2.2: RESTRUCTURATION DE src/utils/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "============================================================",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/utils/optimization/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: hardware_optimizer.py → optimization/hardware.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: arm_optimizer.py → optimization/arm.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: gc_optimizer.py → optimization/gc.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/utils/execution/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: parallel_executor.py → execution/parallel_executor.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: parallel_workers.py → execution/parallel_workers.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: command_helpers.py → execution/command_helpers.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/utils/persistence/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: cache_manager.py → persistence/cache_manager.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: user_config.py → persistence/user_config.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: rollback_manager.py → persistence/rollback_manager.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: auto_corrector.py → persistence/auto_corrector.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/utils/services/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: ollama_manager.py → services/ollama_manager.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Créé dossier: src/utils/helpers/",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: logger.py → helpers/logger.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: tag_parser.py → helpers/tag_parser.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: ui_helpers.py → helpers/ui_helpers.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  Déplacé: text_processing.py → helpers/text_processing.py",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "\n============================================================",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "MISE À JOUR DES IMPORTS",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "============================================================",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "Nombre de mappings d'imports: 29",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  ✓ src/terminal_interface.py: 4 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  ✓ src/core/builtins.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:29",
+    "level": "INFO",
+    "message": "  ✓ src/core/pty_shell.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:30",
+    "level": "INFO",
+    "message": "  ✓ src/modules/command_executor.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:30",
+    "level": "INFO",
+    "message": "  ✓ src/modules/command_parser.py: 2 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:30",
+    "level": "INFO",
+    "message": "  ✓ src/security/validator.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:30",
+    "level": "INFO",
+    "message": "  ✓ src/terminal/ai_stream_processor.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:30",
+    "level": "INFO",
+    "message": "  ✓ src/terminal/rich_console.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:31",
+    "level": "INFO",
+    "message": "  ✓ main.py: 2 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:31",
+    "level": "INFO",
+    "message": "  ✓ src/terminal_interface.py: 4 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:44",
+    "level": "INFO",
+    "message": "  ✓ src/core/builtins.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:44",
+    "level": "INFO",
+    "message": "  ✓ src/core/pty_shell.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:44",
+    "level": "INFO",
+    "message": "  ✓ src/modules/command_executor.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:44",
+    "level": "INFO",
+    "message": "  ✓ src/modules/command_parser.py: 2 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:44",
+    "level": "INFO",
+    "message": "  ✓ src/security/validator.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:44",
+    "level": "INFO",
+    "message": "  ✓ src/terminal/ai_stream_processor.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:44",
+    "level": "INFO",
+    "message": "  ✓ src/terminal/rich_console.py: 1 import(s) mis à jour",
+    "dry_run": true
+  },
+  {
+    "timestamp": "09:54:45",
+    "level": "INFO",
+    "message": "\nRésumé: 26 imports mis à jour dans 17 fichiers",
+    "dry_run": true
+  }
+]
